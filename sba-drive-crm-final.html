@@ -8,7 +8,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SBA Drive CRM</title>
 <script src="https://apis.google.com/js/api.js"></script>
-<script src="https://accounts.google.com/gsi/client"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root {
@@ -391,8 +390,13 @@ let editingCompanyIndex = -1;
 let editingSheetName = '';
 
 // ==================== GOOGLE API INIT ====================
-function gapiLoaded() { gapiLoaded = true; maybeInit(); }
-function gisLoaded() { gisLoaded = true; maybeInit(); }
+// NOTE: these callbacks are named differently from the gapiLoaded/gisLoaded
+// state flags above. Reusing the same name for both a `let` variable and a
+// `function` declaration in the same scope is a SyntaxError in JS, which
+// silently kills the entire script (that's what caused "handleAuthClick is
+// not defined" - the whole file failed to parse, so nothing was ever defined).
+function onGapiLoad() { gapiLoaded = true; maybeInit(); }
+function onGisLoad() { gisLoaded = true; maybeInit(); }
 
 function maybeInit() {
   if (gapiLoaded && gisLoaded) {
@@ -906,9 +910,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
-// Load Google APIs
-gapi.load('client', gapiLoaded);
+// Load Google APIs (gapi library was already fetched via the <script> tag in <head>)
+gapi.load('client', onGapiLoad);
 </script>
-<script src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+<script src="https://accounts.google.com/gsi/client" onload="onGisLoad()"></script>
 </body>
 </html>
