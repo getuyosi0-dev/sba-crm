@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#0f4c81">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SBA Drive CRM</title>
@@ -547,8 +548,6 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
-<script src="https://apis.google.com/js/api.js" onload="onGapiLoad()" onerror="onGapiError()"></script>
-<script src="https://accounts.google.com/gsi/client" onload="onGisLoad()" onerror="onGisError()"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 'use strict';
@@ -1684,5 +1683,13 @@ window.addEventListener('unhandledrejection', (e) => {
   console.error('Unhandled promise rejection:', e.reason);
 });
 </script>
+
+<!-- These two must load AFTER the inline JS above, since their onload
+     handlers (onGapiLoad/onGisLoad) are defined there. Loading them earlier
+     (e.g. in the head) fires "ReferenceError: onGapiLoad is not defined"
+     because the browser executes onload the instant each script finishes
+     fetching, before a later inline script block has been parsed. -->
+<script src="https://apis.google.com/js/api.js" onload="onGapiLoad()" onerror="onGapiError()"></script>
+<script src="https://accounts.google.com/gsi/client" onload="onGisLoad()" onerror="onGisError()"></script>
 </body>
 </html>
