@@ -7,8 +7,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SBA Drive CRM</title>
-<script src="https://apis.google.com/js/api.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root {
   --primary: #0f4c81; --primary-dark: #0a3a63; --accent: #e8b923;
@@ -23,15 +21,22 @@ html, body { height: 100%; font-family: -apple-system, BlinkMacSystemFont, 'Sego
 body { padding-bottom: 80px; }
 .app-header { position: sticky; top: 0; z-index: 100; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 16px; box-shadow: 0 2px 12px rgba(15,76,129,0.3); display: flex; align-items: center; justify-content: space-between; }
 .app-header h1 { font-size: 18px; font-weight: 600; }
-.drive-status { font-size: 11px; padding: 4px 10px; border-radius: 20px; background: rgba(255,255,255,0.2); display: flex; align-items: center; gap: 6px; }
+.drive-status { font-size: 11px; padding: 4px 10px; border-radius: 20px; background: rgba(255,255,255,0.2); display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .drive-status.connected { background: rgba(40,167,69,0.3); }
 .drive-status.disconnected { background: rgba(220,53,69,0.3); }
+.drive-status.connecting { background: rgba(253,126,20,0.35); }
+.drive-status.expired { background: rgba(220,53,69,0.45); }
 .drive-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
-.drive-status.disconnected .drive-dot { background: var(--danger); }
-.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 8px 0 calc(8px + var(--safe-bottom)); z-index: 100; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
-.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; color: var(--text-light); font-size: 11px; cursor: pointer; transition: all 0.2s; border: none; background: none; }
+.drive-status.disconnected .drive-dot, .drive-status.expired .drive-dot { background: var(--danger); }
+.drive-status.connecting .drive-dot { background: var(--warning); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+.reconnect-banner { background: var(--danger); color: white; padding: 10px 16px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.reconnect-banner button { background: white; color: var(--danger); border: none; border-radius: var(--radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; overflow-x: auto; padding: 8px 0 calc(8px + var(--safe-bottom)); z-index: 100; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); scrollbar-width: none; }
+.bottom-nav::-webkit-scrollbar { display: none; }
+.nav-item { flex: 1 0 62px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; color: var(--text-light); font-size: 10.5px; cursor: pointer; transition: all 0.2s; border: none; background: none; min-width: 62px; }
 .nav-item.active { color: var(--primary); }
-.nav-item svg { width: 24px; height: 24px; }
+.nav-item svg { width: 22px; height: 22px; }
 .screen { display: none; padding: 16px; max-width: 900px; margin: 0 auto; animation: fadeIn 0.25s ease; }
 .screen.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -45,6 +50,7 @@ body { padding-bottom: 80px; }
 .kpi-card.success { border-left-color: var(--success); }
 .kpi-value { font-size: 22px; font-weight: 700; color: var(--primary); }
 .kpi-card.hot .kpi-value { color: var(--danger); }
+.kpi-card.success .kpi-value { color: var(--success); }
 .kpi-label { font-size: 12px; color: var(--text-light); margin-top: 4px; }
 .quick-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
 .qa-btn { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; border: none; border-radius: var(--radius); padding: 14px 8px; font-size: 12px; font-weight: 500; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: transform 0.15s; }
@@ -57,14 +63,17 @@ body { padding-bottom: 80px; }
 .company-list { display: flex; flex-direction: column; gap: 10px; }
 .company-card { background: var(--card); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); border: 1px solid var(--border); cursor: pointer; transition: all 0.15s; }
 .company-card:active { transform: scale(0.99); }
-.company-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; }
+.company-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; gap: 8px; }
 .company-name { font-size: 15px; font-weight: 600; color: var(--text); line-height: 1.3; }
 .company-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+.badge { font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .badge-hot { background: #fde8e8; color: #c0392b; }
 .badge-warm { background: #fff3e0; color: #e67e22; }
 .badge-cold { background: #e3f2fd; color: #1976d2; }
 .badge-industry { background: #f3e5f5; color: #7b1fa2; }
+.badge-overdue { background: #fde8e8; color: #c0392b; }
+.badge-today { background: #fff3e0; color: #e67e22; }
+.badge-upcoming { background: #e3f2fd; color: #1976d2; }
 .company-location { font-size: 12px; color: var(--text-light); display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; margin-bottom: 12px; scrollbar-width: none; }
 .filter-bar::-webkit-scrollbar { display: none; }
@@ -78,6 +87,7 @@ body { padding-bottom: 80px; }
 .form-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236c757d' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 20px; border-radius: var(--radius-sm); font-size: 15px; font-weight: 500; border: none; cursor: pointer; transition: all 0.15s; width: 100%; }
 .btn:active { transform: scale(0.98); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .btn-primary { background: var(--primary); color: white; }
 .btn-success { background: var(--success); color: white; }
 .btn-danger { background: var(--danger); color: white; }
@@ -88,15 +98,11 @@ body { padding-bottom: 80px; }
 .modal-overlay.active { display: flex; }
 .modal-sheet { background: var(--card); width: 100%; max-width: 600px; border-radius: var(--radius) var(--radius) 0 0; max-height: 90vh; overflow-y: auto; animation: slideUp 0.25s ease; }
 @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.modal-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.modal-header { padding: 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: var(--card); z-index: 2; }
 .modal-title { font-size: 18px; font-weight: 600; }
 .modal-close { background: none; border: none; font-size: 24px; color: var(--text-light); cursor: pointer; padding: 4px; }
 .modal-body { padding: 20px; }
 .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
-.tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); margin-bottom: 16px; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
-.tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-light); border: none; background: none; cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent; transition: all 0.2s; }
-.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 .profile-header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 24px 16px; margin: -16px -16px 16px; border-radius: 0 0 var(--radius) var(--radius); }
 .profile-header h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
 .profile-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; opacity: 0.9; }
@@ -110,8 +116,10 @@ body { padding-bottom: 80px; }
 .login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; text-align: center; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; }
 .login-screen h1 { font-size: 28px; margin-bottom: 8px; }
 .login-screen p { font-size: 14px; opacity: 0.9; margin-bottom: 32px; max-width: 320px; line-height: 1.5; }
+.login-status { font-size: 13px; margin-bottom: 16px; min-height: 18px; opacity: 0.9; }
 .google-btn { background: white; color: #444; border: none; border-radius: var(--radius); padding: 14px 24px; font-size: 15px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); transition: transform 0.15s; }
 .google-btn:active { transform: scale(0.98); }
+.google-btn:disabled { opacity: 0.6; }
 .file-card { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--card); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 10px; cursor: pointer; transition: all 0.15s; }
 .file-card:active { transform: scale(0.99); }
 .file-icon { width: 40px; height: 40px; background: #e8f5e9; color: #2e7d32; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
@@ -122,31 +130,46 @@ body { padding-bottom: 80px; }
 .save-indicator { position: fixed; top: 60px; right: 16px; z-index: 250; background: var(--success); color: white; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; display: none; align-items: center; gap: 8px; box-shadow: var(--shadow); }
 .save-indicator.show { display: flex; animation: fadeIn 0.3s; }
 .save-indicator.saving { background: var(--warning); }
-.field-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
-.field-label { color: var(--text-light); font-size: 13px; }
-.field-value { font-weight: 500; text-align: right; max-width: 60%; }
-.edit-btn { background: none; border: none; color: var(--primary); font-size: 13px; cursor: pointer; padding: 4px; }
+.save-indicator.error { background: var(--danger); }
 .sheet-tabs { display: flex; gap: 4px; overflow-x: auto; margin-bottom: 12px; scrollbar-width: none; }
 .sheet-tabs::-webkit-scrollbar { display: none; }
 .sheet-tab { padding: 8px 16px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--card); cursor: pointer; white-space: nowrap; }
 .sheet-tab.active { background: var(--primary); color: white; border-color: var(--primary); }
-.cell-grid { display: grid; gap: 1px; background: var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.cell-header { background: var(--primary); color: white; padding: 10px 8px; font-size: 12px; font-weight: 600; text-align: left; }
-.cell-data { background: var(--card); padding: 10px 8px; font-size: 13px; }
-.cell-data input { width: 100%; border: none; background: transparent; font-size: 13px; font-family: inherit; padding: 0; }
-.cell-data input:focus { outline: none; }
+.activity-item { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
+.activity-item:last-child { border-bottom: none; }
+.activity-date-box { flex-shrink: 0; width: 46px; text-align: center; background: var(--bg); border-radius: var(--radius-sm); padding: 6px 2px; }
+.activity-date-box .d { font-size: 16px; font-weight: 700; color: var(--primary); line-height: 1; }
+.activity-date-box .m { font-size: 10px; color: var(--text-light); text-transform: uppercase; }
+.activity-body { flex: 1; min-width: 0; }
+.activity-type-tag { font-size: 11px; font-weight: 600; color: var(--primary); text-transform: uppercase; letter-spacing: 0.3px; }
+.activity-company { font-size: 14px; font-weight: 600; margin-top: 2px; }
+.activity-desc { font-size: 13px; color: var(--text-light); margin-top: 3px; line-height: 1.4; }
+.pipeline-stage { background: var(--card); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; border: 1px solid var(--border); }
+.pipeline-stage-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.pipeline-bar-track { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden; }
+.pipeline-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--accent)); border-radius: 4px; }
+.pipeline-stage-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-light); margin-top: 6px; }
+.report-range { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.stat-row { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.stat-row:last-child { border-bottom: none; }
+.stat-row .n { font-weight: 700; color: var(--primary); }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mini-table th { background: var(--primary); color: white; padding: 8px; text-align: left; font-size: 11px; white-space: nowrap; }
+.mini-table td { padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.mini-table-wrap { overflow-x: auto; }
 @media (min-width: 768px) {
   .kpi-grid { grid-template-columns: repeat(4, 1fr); }
   .quick-actions { grid-template-columns: repeat(4, 1fr); }
   .bottom-nav { display: none; }
   body { padding-bottom: 16px; }
   .desktop-nav { position: sticky; top: 0; z-index: 100; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; height: 56px; }
-  .desktop-nav .nav-links { display: flex; gap: 8px; }
-  .desktop-nav .nav-link { color: rgba(255,255,255,0.8); text-decoration: none; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 500; transition: all 0.2s; }
+  .desktop-nav .nav-links { display: flex; gap: 4px; overflow-x: auto; }
+  .desktop-nav .nav-link { color: rgba(255,255,255,0.8); text-decoration: none; padding: 8px 14px; border-radius: var(--radius-sm); font-size: 13.5px; font-weight: 500; transition: all 0.2s; white-space: nowrap; cursor: pointer; }
   .desktop-nav .nav-link:hover, .desktop-nav .nav-link.active { color: white; background: rgba(255,255,255,0.15); }
   .screen { padding: 24px; }
   .modal-overlay { align-items: center; }
   .modal-sheet { border-radius: var(--radius); max-height: 85vh; }
+  .mobile-only { display: none !important; }
 }
 @media (max-width: 767px) { .desktop-only { display: none !important; } }
 </style>
@@ -157,16 +180,17 @@ body { padding-bottom: 80px; }
 <div id="loginScreen" class="login-screen">
   <div style="font-size:64px;margin-bottom:16px;">📊</div>
   <h1>SBA Drive CRM</h1>
-  <p>Connect your Google Drive to manage SBA Excel files from your phone. Read, edit, and save directly to Drive.</p>
-  <button class="google-btn" onclick="handleAuthClick()">
+  <p>Connect your Google Drive to manage SBA sales data from your phone. Read, edit, and save directly to Drive.</p>
+  <div class="login-status" id="loginStatus"></div>
+  <button class="google-btn" id="googleBtn" onclick="handleAuthClick()" disabled>
     <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-    Sign in with Google
+    <span id="googleBtnLabel">Loading Google Sign-In…</span>
   </button>
   <div style="margin-top:32px;font-size:12px;opacity:0.7;max-width:300px;line-height:1.6;">
     <p style="margin-bottom:8px;"><strong>How it works:</strong></p>
     <p>1. Sign in with your Google account</p>
     <p>2. Select your SBA Excel file from Google Drive</p>
-    <p>3. Edit companies, visits, opportunities on your phone</p>
+    <p>3. Log visits, calls and opportunities on your phone</p>
     <p>4. Save back to Google Drive automatically</p>
     <p>5. Download the updated file anytime</p>
   </div>
@@ -175,16 +199,24 @@ body { padding-bottom: 80px; }
 <!-- Main App -->
 <div id="mainApp" style="display:none;">
 
+<div class="reconnect-banner" id="reconnectBanner" style="display:none;">
+  <span>Your Google session expired. Reconnect to keep saving to Drive.</span>
+  <button onclick="handleAuthClick()">Reconnect</button>
+</div>
+
 <!-- Desktop Nav -->
 <nav class="desktop-nav desktop-only">
-  <div style="font-weight:700;font-size:16px;">SBA Drive CRM</div>
+  <div style="font-weight:700;font-size:16px;flex-shrink:0;">SBA Drive CRM</div>
   <div class="nav-links">
-    <a href="#" class="nav-link active" onclick="navigate('dashboard')">Dashboard</a>
-    <a href="#" class="nav-link" onclick="navigate('companies')">Companies</a>
-    <a href="#" class="nav-link" onclick="navigate('sheets')">Sheets</a>
-    <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
+    <a class="nav-link active" data-screen="dashboard" onclick="navigate('dashboard')">Dashboard</a>
+    <a class="nav-link" data-screen="companies" onclick="navigate('companies')">Companies</a>
+    <a class="nav-link" data-screen="activities" onclick="navigate('activities')">Activities</a>
+    <a class="nav-link" data-screen="pipeline" onclick="navigate('pipeline')">Pipeline</a>
+    <a class="nav-link" data-screen="reports" onclick="navigate('reports')">Reports</a>
+    <a class="nav-link" data-screen="sheets" onclick="navigate('sheets')">Sheets</a>
+    <a class="nav-link" data-screen="drive" onclick="navigate('drive')">Drive</a>
   </div>
-  <div class="drive-status disconnected" id="driveStatus">
+  <div class="drive-status disconnected" id="driveStatus" onclick="handleAuthClick()">
     <span class="drive-dot"></span><span id="driveStatusText">Disconnected</span>
   </div>
 </nav>
@@ -192,24 +224,25 @@ body { padding-bottom: 80px; }
 <!-- Mobile Header -->
 <header class="app-header mobile-only">
   <h1 id="pageTitle">Dashboard</h1>
-  <div class="drive-status disconnected" id="mobileDriveStatus">
+  <div class="drive-status disconnected" id="mobileDriveStatus" onclick="handleAuthClick()">
     <span class="drive-dot"></span><span id="mobileDriveStatusText">Disconnected</span>
   </div>
 </header>
 
 <div class="toast-container" id="toastContainer"></div>
-<div class="save-indicator" id="saveIndicator"><span class="loading"></span> Saving to Drive...</div>
+<div class="save-indicator" id="saveIndicator"></div>
 
 <!-- DASHBOARD -->
 <div class="screen active" id="screen-dashboard">
   <div class="card" id="fileInfoCard" style="display:none;">
-    <div class="card-title">Active File <button class="edit-btn" onclick="showFilePicker()">Change</button></div>
+    <div class="card-title">Active File <button class="edit-btn" style="background:none;border:none;color:var(--primary);font-size:13px;cursor:pointer;" onclick="showFilePicker()">Change</button></div>
     <div class="drive-folder">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
       <span id="activeFileName">No file selected</span>
     </div>
+    <div id="lastSavedText" style="font-size:12px;color:var(--text-light);margin-bottom:10px;"></div>
     <div style="display:flex;gap:10px;">
-      <button class="btn btn-primary btn-sm" onclick="saveToDrive()" style="flex:1;">
+      <button class="btn btn-primary btn-sm" onclick="saveToDrive()" style="flex:1;" id="saveBtn">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
         Save to Drive
       </button>
@@ -228,34 +261,53 @@ body { padding-bottom: 80px; }
       Select Excel File from Drive
     </button>
     <div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:var(--radius-sm);font-size:12px;color:var(--text-light);">
-      <strong>Supported files:</strong> SBA_Workbook22.xlsx, Customer_Sales_Tracker.xlsx, or any .xlsx file
+      Any .xlsx file works. If the app can't confidently detect your customer sheet, it will ask you to pick it.
     </div>
   </div>
 
   <div class="kpi-grid" id="kpiSection" style="display:none;">
+    <div class="kpi-card success"><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-label">Total Companies</div></div>
     <div class="kpi-card hot"><div class="kpi-value" id="kpiHot">0</div><div class="kpi-label">Hot</div></div>
     <div class="kpi-card warm"><div class="kpi-value" id="kpiWarm">0</div><div class="kpi-label">Warm</div></div>
     <div class="kpi-card cold"><div class="kpi-value" id="kpiCold">0</div><div class="kpi-label">Cold</div></div>
-    <div class="kpi-card success"><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-label">Total Companies</div></div>
+    <div class="kpi-card"><div class="kpi-value" id="kpiActWeek">0</div><div class="kpi-label">Activities This Week</div></div>
+    <div class="kpi-card"><div class="kpi-value" id="kpiVisitWeek">0</div><div class="kpi-label">Visits This Week</div></div>
+    <div class="kpi-card"><div class="kpi-value" id="kpiCallWeek">0</div><div class="kpi-label">Calls This Week</div></div>
+    <div class="kpi-card hot"><div class="kpi-value" id="kpiOverdue">0</div><div class="kpi-label">Overdue Follow-ups</div></div>
   </div>
 
   <div class="quick-actions" id="quickActions" style="display:none;">
     <button class="qa-btn" onclick="openAddCompany()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Add Company
     </button>
-    <button class="qa-btn" onclick="navigate('companies')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>View All
+    <button class="qa-btn" onclick="openAddActivity()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>Log Activity
     </button>
-    <button class="qa-btn secondary" onclick="navigate('sheets')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
+    <button class="qa-btn secondary" onclick="navigate('reports')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>Reports
     </button>
     <button class="qa-btn secondary" onclick="saveToDrive()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save
     </button>
   </div>
 
+  <div class="card" id="followupTodayCard" style="display:none;">
+    <div class="card-title">Today's Follow-ups <span id="followupTodayCount" class="badge badge-today"></span></div>
+    <div id="followupToday"></div>
+  </div>
+
+  <div class="card" id="followupUpcomingCard" style="display:none;">
+    <div class="card-title">Upcoming Follow-ups (7 days)</div>
+    <div id="followupUpcoming"></div>
+  </div>
+
+  <div class="card" id="hotOppCard" style="display:none;">
+    <div class="card-title">Hot Opportunities</div>
+    <div id="hotOppList"></div>
+  </div>
+
   <div class="card" id="recentActivityCard" style="display:none;">
-    <div class="card-title">Recent Activity</div>
+    <div class="card-title">Recent Activities</div>
     <div id="recentActivity"></div>
   </div>
 </div>
@@ -263,13 +315,13 @@ body { padding-bottom: 80px; }
 <!-- COMPANIES -->
 <div class="screen" id="screen-companies">
   <div class="search-bar">
-    <input type="text" class="search-input" id="companySearch" placeholder="Search companies..." oninput="renderCompanies()">
+    <input type="text" class="search-input" id="companySearch" placeholder="Search name, brand, industry, contact, phone..." oninput="renderCompanies()">
   </div>
   <div class="filter-bar">
-    <button class="filter-chip active" onclick="setFilter('all')">All</button>
-    <button class="filter-chip" onclick="setFilter('Hot')">Hot</button>
-    <button class="filter-chip" onclick="setFilter('Warm')">Warm</button>
-    <button class="filter-chip" onclick="setFilter('Cold')">Cold</button>
+    <button class="filter-chip active" data-f="all" onclick="setFilter('all',this)">All</button>
+    <button class="filter-chip" data-f="Hot" onclick="setFilter('Hot',this)">Hot</button>
+    <button class="filter-chip" data-f="Warm" onclick="setFilter('Warm',this)">Warm</button>
+    <button class="filter-chip" data-f="Cold" onclick="setFilter('Cold',this)">Cold</button>
   </div>
   <div class="company-list" id="companyList"></div>
 </div>
@@ -281,10 +333,77 @@ body { padding-bottom: 80px; }
     <h2 id="editCompanyName">Company</h2>
     <div class="profile-meta"><span id="editCompanyIndustry">Industry</span><span>&bull;</span><span id="editCompanyStatus">Status</span></div>
   </div>
-  <div id="editForm"></div>
-  <div style="display:flex;gap:10px;margin-top:16px;">
-    <button class="btn btn-primary" onclick="saveCompanyEdit()">Save Changes</button>
-    <button class="btn btn-secondary" onclick="navigate('companies')">Cancel</button>
+  <div class="card">
+    <div class="card-title">Company Information</div>
+    <div id="editForm"></div>
+    <div style="display:flex;gap:10px;margin-top:8px;">
+      <button class="btn btn-primary" onclick="saveCompanyEdit()">Save Changes</button>
+      <button class="btn btn-secondary" onclick="navigate('companies')">Cancel</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">Activity History <button class="btn btn-sm btn-primary" style="width:auto;" onclick="openAddActivity(document.getElementById('editCompanyName').textContent)">+ Log</button></div>
+    <div id="editCompanyActivities"></div>
+  </div>
+</div>
+
+<!-- ACTIVITIES -->
+<div class="screen" id="screen-activities">
+  <button class="btn btn-primary" style="margin-bottom:14px;" onclick="openAddActivity()">+ Log New Activity</button>
+  <div class="search-bar" style="top:8px;">
+    <input type="text" class="search-input" id="activitySearch" placeholder="Search activities..." oninput="renderActivities()">
+  </div>
+  <div class="filter-bar" id="activityTypeFilterBar"></div>
+  <div class="card">
+    <div id="activityList"></div>
+  </div>
+</div>
+
+<!-- PIPELINE -->
+<div class="screen" id="screen-pipeline">
+  <div class="card">
+    <div class="card-title">Sales Pipeline</div>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Number of companies and total estimated value at each stage.</p>
+    <div id="pipelineStages"></div>
+  </div>
+</div>
+
+<!-- REPORTS -->
+<div class="screen" id="screen-reports">
+  <div class="card">
+    <div class="card-title">Weekly Sales Report</div>
+    <div class="report-range">
+      <button class="filter-chip active" data-r="this" onclick="setReportRange('this',this)">This Week</button>
+      <button class="filter-chip" data-r="last" onclick="setReportRange('last',this)">Last Week</button>
+      <button class="filter-chip" data-r="custom" onclick="setReportRange('custom',this)">Custom Range</button>
+    </div>
+    <div id="customRangeInputs" style="display:none;margin-bottom:14px;">
+      <div style="display:flex;gap:10px;">
+        <div class="form-group" style="flex:1;"><label class="form-label">From</label><input type="date" class="form-input" id="reportFrom" onchange="renderReport()"></div>
+        <div class="form-group" style="flex:1;"><label class="form-label">To</label><input type="date" class="form-input" id="reportTo" onchange="renderReport()"></div>
+      </div>
+    </div>
+    <div id="reportRangeLabel" style="font-size:13px;color:var(--text-light);margin-bottom:12px;"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Sales Activity Summary</div>
+    <div id="reportActivitySummary"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Opportunity Summary</div>
+    <div id="reportOppSummary"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Follow-ups</div>
+    <div id="reportFollowups"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Customer Activity</div>
+    <div class="mini-table-wrap"><table class="mini-table" id="reportActivityTable"></table></div>
   </div>
 </div>
 
@@ -292,7 +411,7 @@ body { padding-bottom: 80px; }
 <div class="screen" id="screen-sheets">
   <div class="card">
     <div class="card-title">Excel Sheets</div>
-    <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">View and edit raw Excel data. Changes sync back to your Drive file.</p>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">Read-only view of raw Excel data. Use Companies/Activities screens to edit — this avoids corrupting formulas.</p>
     <div class="sheet-tabs" id="sheetTabs"></div>
     <div id="sheetContent"></div>
   </div>
@@ -303,22 +422,32 @@ body { padding-bottom: 80px; }
   <div class="card">
     <div class="card-title">Your Drive Files</div>
     <button class="btn btn-primary" onclick="showFilePicker()" style="margin-bottom:16px;">Select Excel File</button>
+    <button class="btn btn-secondary" onclick="listDriveFiles()" style="margin-bottom:16px;">Refresh List</button>
     <div id="driveFilesList"></div>
   </div>
 </div>
 
 <!-- Bottom Nav -->
 <nav class="bottom-nav mobile-only">
-  <button class="nav-item active" onclick="navigate('dashboard')">
+  <button class="nav-item active" data-screen="dashboard" onclick="navigate('dashboard')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Home
   </button>
-  <button class="nav-item" onclick="navigate('companies')">
+  <button class="nav-item" data-screen="companies" onclick="navigate('companies')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Companies
   </button>
-  <button class="nav-item" onclick="navigate('sheets')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
+  <button class="nav-item" data-screen="activities" onclick="navigate('activities')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>Activities
   </button>
-  <button class="nav-item" onclick="navigate('drive')">
+  <button class="nav-item" data-screen="pipeline" onclick="navigate('pipeline')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>Pipeline
+  </button>
+  <button class="nav-item" data-screen="reports" onclick="navigate('reports')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/></svg>Reports
+  </button>
+  <button class="nav-item" data-screen="sheets" onclick="navigate('sheets')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Sheets
+  </button>
+  <button class="nav-item" data-screen="drive" onclick="navigate('drive')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Drive
   </button>
 </nav>
@@ -369,9 +498,67 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
+<!-- Add Activity Modal -->
+<div class="modal-overlay" id="modalAddActivity">
+  <div class="modal-sheet">
+    <div class="modal-header"><div class="modal-title">Log Activity</div><button class="modal-close" onclick="closeModal('modalAddActivity')">&times;</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Date *</label><input type="date" class="form-input" id="aaDate"></div>
+      <div class="form-group">
+        <label class="form-label">Customer *</label>
+        <input type="text" class="form-input" id="aaCompany" list="companyDatalist" placeholder="Start typing company name">
+        <datalist id="companyDatalist"></datalist>
+      </div>
+      <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="aaContact"></div>
+      <div class="form-group">
+        <label class="form-label">Activity Type *</label>
+        <select class="form-select" id="aaType">
+          <option>Visit</option><option>Phone Call</option><option>WhatsApp</option><option>Email</option>
+          <option>Meeting</option><option>Follow-up</option><option>Technical Discussion</option><option>Demo</option>
+          <option>Quotation</option><option>Other</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Subject</label><input type="text" class="form-input" id="aaSubject"></div>
+      <div class="form-group"><label class="form-label">Discussion / Description</label><textarea class="form-textarea" id="aaDescription"></textarea></div>
+      <div class="form-group"><label class="form-label">Result</label><input type="text" class="form-input" id="aaResult"></div>
+      <div class="form-group"><label class="form-label">Follow-up Action</label><input type="text" class="form-input" id="aaFollowupAction"></div>
+      <div class="form-group"><label class="form-label">Next Follow-up Date</label><input type="date" class="form-input" id="aaNextFollowup"></div>
+      <div class="form-group">
+        <label class="form-label">Status</label>
+        <select class="form-select" id="aaStatus"><option>Open</option><option>Completed</option><option>Pending</option><option>Cancelled</option></select>
+      </div>
+      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="aaNotes"></textarea></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modalAddActivity')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveActivity()">Save Activity</button>
+    </div>
+  </div>
+</div>
+
+<!-- Choose Sheet Modal (fallback when the customer sheet can't be confidently detected) -->
+<div class="modal-overlay" id="modalChooseSheet">
+  <div class="modal-sheet">
+    <div class="modal-header"><div class="modal-title">Which sheet is your customer list?</div><button class="modal-close" onclick="closeModal('modalChooseSheet')">&times;</button></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">We couldn't confidently detect which sheet holds your company data. Pick it below.</p>
+      <div id="chooseSheetOptions"></div>
+    </div>
+  </div>
+</div>
+
+<script src="https://apis.google.com/js/api.js" onload="onGapiLoad()" onerror="onGapiError()"></script>
+<script src="https://accounts.google.com/gsi/client" onload="onGisLoad()" onerror="onGisError()"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
+'use strict';
+
 // ==================== CONFIG - YOUR CREDENTIALS ====================
-// WARNING: Keep this file private. Do not share it publicly.
+// IMPORTANT: This is a browser-only OAuth app, so CLIENT_ID and API_KEY are
+// meant to be public (they are restricted in Google Cloud Console by HTTP
+// referrer / API restrictions, not kept secret). Never put a client SECRET
+// or a service-account key in this file — those are not needed here and
+// must never live in frontend code.
 const CLIENT_ID = '530314990385-3b26u4l9184uiivrjbhtv63nrt8n1234.apps.googleusercontent.com';
 const API_KEY = 'AIzaSyDvTUgsR57lgOnSWbvcy268BS_juxe7StY';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
@@ -379,97 +566,248 @@ const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapi
 // ==================== STATE ====================
 let gapiLoaded = false;
 let gisLoaded = false;
+let gapiClientReady = false;
 let tokenClient = null;
 let accessToken = null;
+let tokenExpiresAt = 0; // epoch ms
 let currentFile = null;
 let workbook = null;
+let masterSheetName = null;   // resolved "companies" sheet
+let activitiesSheetName = 'Activities';
 let currentSheet = 0;
 let currentScreen = 'dashboard';
 let companyFilter = 'all';
+let activityTypeFilter = 'all';
 let editingCompanyIndex = -1;
 let editingSheetName = '';
+let editingCompanyName = '';
+let reportRangeMode = 'this';
+let lastSavedAt = null;
+let awaitingReconnect = false;
 
-// ==================== GOOGLE API INIT ====================
-// NOTE: these callbacks are named differently from the gapiLoaded/gisLoaded
-// state flags above. Reusing the same name for both a `let` variable and a
-// `function` declaration in the same scope is a SyntaxError in JS, which
-// silently kills the entire script (that's what caused "handleAuthClick is
-// not defined" - the whole file failed to parse, so nothing was ever defined).
+const ACTIVITY_HEADERS = ['Activity_ID','Date','Company','Contact_Person','Activity_Type','Subject','Description','Opportunity','Result','Follow_Up_Action','Next_Follow_Up','Status','Notes'];
+
+// Canonical field -> list of header variants we should recognize (normalized: lowercase, non-alnum stripped)
+const HEADER_SYNONYMS = {
+  name: ['name','companyname','company','customer','customername','clientname','businessname'],
+  brand_name: ['brandname','brand'],
+  industry: ['industry','sector','category'],
+  location: ['location','city','address','region'],
+  opp_status: ['oppstatus','opportunitystatus','status','temperature','leadstatus'],
+  sales_stage: ['salesstage','stage','pipelinestage'],
+  priority: ['priority','priorityscore','priolevel'],
+  est_value: ['estvalue','estimatedvalue','value','dealvalue','oppvalue'],
+  probability: ['probability','prob','winprobability'],
+  exp_revenue: ['exprevenue','expectedrevenue','weightedvalue'],
+  contact_person: ['contactperson','contact','contactname'],
+  phone: ['phone','phonenumber','mobile','tel','contactphone'],
+  notes: ['notes','note','remarks','comments'],
+};
+
+// ==================== GOOGLE API LOAD (fixed) ====================
+// The two script tags above now call onGapiLoad()/onGisLoad() via the
+// onload attribute. Without that, gapiLoaded/gisLoaded never flip to true
+// and nothing downstream ever initializes — that was the root cause of the
+// app looking "dead" (Sign in button stuck on Loading, no console errors).
 function onGapiLoad() { gapiLoaded = true; maybeInit(); }
 function onGisLoad() { gisLoaded = true; maybeInit(); }
+function onGapiError() { setLoginStatus('Could not load Google APIs. Check your internet connection and reload.', true); }
+function onGisError() { setLoginStatus('Could not load Google Sign-In. Check your internet connection and reload.', true); }
+
+function setLoginStatus(msg, isError) {
+  const el = document.getElementById('loginStatus');
+  if (el) { el.textContent = msg || ''; el.style.color = isError ? '#ffd7d7' : ''; }
+}
 
 function maybeInit() {
   if (gapiLoaded && gisLoaded) {
-    gapi.load('client:picker', initGapiClient);
+    gapi.load('client:picker', {
+      callback: initGapiClient,
+      onerror: function () { setLoginStatus('Failed to load Google client/picker libraries.', true); }
+    });
   }
 }
 
 function initGapiClient() {
-  gapi.client.init({ apiKey: API_KEY, discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'] })
-    .then(() => {
-      console.log('GAPI client initialized');
-      const savedToken = localStorage.getItem('sba_drive_token');
-      if (savedToken) {
-        accessToken = savedToken;
-        gapi.client.setToken({ access_token: accessToken });
-        showMainApp();
-      }
-    })
-    .catch(err => console.error('GAPI init error:', err));
+  gapi.client.init({}).then(() => {
+    return gapi.client.load('https://www.googleapis.com/discovery/v1/apis/drive/v3/rest');
+  }).then(() => {
+    gapiClientReady = true;
+    console.log('Google API client ready');
 
-  tokenClient = google.accounts.oauth2.initTokenClient({
-    client_id: CLIENT_ID,
-    scope: SCOPES,
-    callback: (tokenResponse) => {
-      if (tokenResponse.error) { showToast('Sign-in failed: ' + tokenResponse.error, 'error'); return; }
-      accessToken = tokenResponse.access_token;
-      localStorage.setItem('sba_drive_token', accessToken);
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CLIENT_ID,
+      scope: SCOPES,
+      prompt: '',
+      callback: (tokenResponse) => {
+        if (tokenResponse.error) {
+          console.error('OAuth error:', tokenResponse);
+          showToast('Sign-in failed: ' + tokenResponse.error, 'error');
+          setLoginStatus('Sign-in failed: ' + tokenResponse.error, true);
+          return;
+        }
+        accessToken = tokenResponse.access_token;
+        tokenExpiresAt = Date.now() + (parseInt(tokenResponse.expires_in || '3600', 10) * 1000);
+        sessionStorage.setItem('sba_drive_token', accessToken);
+        sessionStorage.setItem('sba_drive_token_exp', String(tokenExpiresAt));
+        gapi.client.setToken({ access_token: accessToken });
+        hideReconnectBanner();
+        updateDriveStatus('connected');
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('mainApp').style.display = 'block';
+        showToast('Connected to Google Drive', 'success');
+        const savedFile = localStorage.getItem('sba_drive_file');
+        if (savedFile && !currentFile) {
+          try { currentFile = JSON.parse(savedFile); loadFileFromDrive(currentFile.id); } catch (e) { /* ignore */ }
+        }
+        renderDashboard();
+      }
+    });
+
+    // Session tokens are only kept in sessionStorage (cleared when the tab
+    // closes) — never persisted to localStorage, and never assumed valid
+    // without verifying with Google first.
+    const savedToken = sessionStorage.getItem('sba_drive_token');
+    const savedExp = parseInt(sessionStorage.getItem('sba_drive_token_exp') || '0', 10);
+    if (savedToken && savedExp > Date.now() + 30000) {
+      accessToken = savedToken;
+      tokenExpiresAt = savedExp;
       gapi.client.setToken({ access_token: accessToken });
-      showMainApp();
-      showToast('Connected to Google Drive', 'success');
+      verifyTokenThenEnter();
+    } else {
+      sessionStorage.removeItem('sba_drive_token');
+      sessionStorage.removeItem('sba_drive_token_exp');
+      enableLoginButton();
     }
+  }).catch(err => {
+    console.error('GAPI init error:', err);
+    setLoginStatus('Failed to initialize Google API client.', true);
+  });
+}
+
+function enableLoginButton() {
+  const btn = document.getElementById('googleBtn');
+  btn.disabled = false;
+  document.getElementById('googleBtnLabel').textContent = 'Sign in with Google';
+  setLoginStatus('');
+}
+
+// Verify a restored token actually still works before pretending we're
+// connected (a stale/expired token must never show "Connected").
+function verifyTokenThenEnter() {
+  setLoginStatus('Reconnecting…');
+  fetch('https://www.googleapis.com/drive/v3/about?fields=user', {
+    headers: { Authorization: 'Bearer ' + accessToken }
+  }).then(res => {
+    if (!res.ok) throw new Error('token invalid (' + res.status + ')');
+    return res.json();
+  }).then(() => {
+    updateDriveStatus('connected');
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('mainApp').style.display = 'block';
+    const savedFile = localStorage.getItem('sba_drive_file');
+    if (savedFile) { currentFile = JSON.parse(savedFile); loadFileFromDrive(currentFile.id); }
+    renderDashboard();
+  }).catch(err => {
+    console.warn('Restored token invalid, requiring fresh sign-in:', err);
+    accessToken = null;
+    sessionStorage.removeItem('sba_drive_token');
+    sessionStorage.removeItem('sba_drive_token_exp');
+    enableLoginButton();
   });
 }
 
 function handleAuthClick() {
-  if (!gapiLoaded || !gisLoaded) { showToast('Google API still loading...', 'warning'); return; }
-  tokenClient.requestAccessToken();
+  if (!gapiClientReady || !tokenClient) { showToast('Google Sign-In is still loading, try again in a second.', 'warning'); return; }
+  awaitingReconnect = false;
+  tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
 }
 
 function handleSignOut() {
+  const token = accessToken;
   accessToken = null;
-  localStorage.removeItem('sba_drive_token');
+  sessionStorage.removeItem('sba_drive_token');
+  sessionStorage.removeItem('sba_drive_token_exp');
   localStorage.removeItem('sba_drive_file');
-  gapi.client.setToken(null);
+  if (token && window.google && google.accounts && google.accounts.oauth2) {
+    google.accounts.oauth2.revoke(token, () => {});
+  }
+  if (gapiClientReady) gapi.client.setToken(null);
   document.getElementById('mainApp').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'flex';
+  currentFile = null; workbook = null;
   showToast('Signed out', 'success');
 }
 
-function showMainApp() {
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('mainApp').style.display = 'block';
-  updateDriveStatus(true);
-  const savedFile = localStorage.getItem('sba_drive_file');
-  if (savedFile) {
-    currentFile = JSON.parse(savedFile);
-    loadFileFromDrive(currentFile.id);
-  }
-  renderDashboard();
+function updateDriveStatus(state) {
+  // state: 'connected' | 'disconnected' | 'connecting' | 'expired'
+  const labels = { connected: 'Drive Connected', disconnected: 'Disconnected', connecting: 'Connecting…', expired: 'Session Expired' };
+  [['driveStatus','driveStatusText'], ['mobileDriveStatus','mobileDriveStatusText']].forEach(([elId, textId]) => {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.className = 'drive-status ' + state;
+    document.getElementById(textId).textContent = labels[state] || state;
+  });
+  if (state === 'expired') showReconnectBanner(); else hideReconnectBanner();
 }
 
-function updateDriveStatus(connected) {
-  const status = connected ? 'connected' : 'disconnected';
-  const text = connected ? 'Drive Connected' : 'Disconnected';
-  const el = document.getElementById('driveStatus');
-  if (el) { el.className = 'drive-status ' + status; document.getElementById('driveStatusText').textContent = text; }
-  const mel = document.getElementById('mobileDriveStatus');
-  if (mel) { mel.className = 'drive-status ' + status; document.getElementById('mobileDriveStatusText').textContent = text; }
+function showReconnectBanner() { const b = document.getElementById('reconnectBanner'); if (b) b.style.display = 'flex'; }
+function hideReconnectBanner() { const b = document.getElementById('reconnectBanner'); if (b) b.style.display = 'none'; }
+
+// ==================== AUTHENTICATED FETCH (handles expired tokens) ====================
+// Central helper used for every Drive REST call. On a 401/403 it tries a
+// silent token refresh once and retries; if that also fails it puts the UI
+// into an honest "Session Expired" state instead of pretending to work.
+function authenticatedFetch(url, options) {
+  options = options || {};
+  options.headers = Object.assign({}, options.headers, { Authorization: 'Bearer ' + accessToken });
+  return fetch(url, options).then(res => {
+    if (res.status === 401 || res.status === 403) {
+      return refreshTokenSilently().then(ok => {
+        if (!ok) { updateDriveStatus('expired'); throw new Error('Session expired — please reconnect to Google Drive.'); }
+        options.headers.Authorization = 'Bearer ' + accessToken;
+        return fetch(url, options).then(res2 => {
+          if (res2.status === 401 || res2.status === 403) {
+            updateDriveStatus('expired');
+            throw new Error('Session expired — please reconnect to Google Drive.');
+          }
+          return res2;
+        });
+      });
+    }
+    return res;
+  });
+}
+
+function refreshTokenSilently() {
+  return new Promise((resolve) => {
+    if (!tokenClient) { resolve(false); return; }
+    const prevCallback = tokenClient.callback;
+    let settled = false;
+    tokenClient.callback = (resp) => {
+      tokenClient.callback = prevCallback;
+      if (settled) return;
+      settled = true;
+      if (resp.error) { resolve(false); return; }
+      accessToken = resp.access_token;
+      tokenExpiresAt = Date.now() + (parseInt(resp.expires_in || '3600', 10) * 1000);
+      sessionStorage.setItem('sba_drive_token', accessToken);
+      sessionStorage.setItem('sba_drive_token_exp', String(tokenExpiresAt));
+      gapi.client.setToken({ access_token: accessToken });
+      updateDriveStatus('connected');
+      resolve(true);
+    };
+    try {
+      tokenClient.requestAccessToken({ prompt: '' });
+      setTimeout(() => { if (!settled) { settled = true; resolve(false); } }, 8000);
+    } catch (e) { resolve(false); }
+  });
 }
 
 // ==================== FILE PICKER ====================
 function showFilePicker() {
   if (!accessToken) { showToast('Please sign in first', 'error'); return; }
+  if (!window.google || !google.picker) { showToast('Picker library still loading, try again.', 'warning'); return; }
   const view = new google.picker.View(google.picker.ViewId.DOCS);
   view.setMimeTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel');
   const picker = new google.picker.PickerBuilder()
@@ -477,6 +815,7 @@ function showFilePicker() {
     .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
     .setAppId(CLIENT_ID.split('-')[0])
     .setOAuthToken(accessToken)
+    .setDeveloperKey(API_KEY)
     .addView(view)
     .addView(new google.picker.DocsUploadView())
     .setCallback(pickerCallback)
@@ -487,58 +826,148 @@ function showFilePicker() {
 function pickerCallback(data) {
   if (data.action === google.picker.Action.PICKED) {
     const file = data.docs[0];
+    if (!file || !file.id) { showToast('No file was selected.', 'error'); return; }
     currentFile = { id: file.id, name: file.name, mimeType: file.mimeType };
     localStorage.setItem('sba_drive_file', JSON.stringify(currentFile));
+    localStorage.removeItem('sba_master_sheet_' + file.id); // reset sheet choice for a newly picked file
     loadFileFromDrive(file.id);
+  } else if (data.action === google.picker.Action.CANCEL) {
+    showToast('File selection cancelled', 'warning');
   }
 }
 
 // ==================== LOAD FILE ====================
+// NOTE: the original code downloaded the binary xlsx via
+// gapi.client.drive.files.get({alt:'media'}) and then read response.body as
+// a JS string via a FileReader over a Blob built from that string. gapi's
+// client wrapper decodes binary responses as text, which silently corrupts
+// non-ASCII bytes in the xlsx zip container — this was why workbooks failed
+// to load/parse correctly. Downloading the bytes with a raw fetch() and
+// reading them with arrayBuffer() avoids that corruption entirely.
 function loadFileFromDrive(fileId) {
   showToast('Loading file from Drive...', 'success');
-  gapi.client.drive.files.get({ fileId: fileId, alt: 'media' })
-    .then(response => {
-      const blob = new Blob([response.body], { type: 'application/octet-stream' });
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const data = new Uint8Array(e.target.result);
-        workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true });
-        showToast('File loaded: ' + currentFile.name, 'success');
-        updateFileUI();
-        renderDashboard();
-        renderCompanies();
-      };
-      reader.readAsArrayBuffer(blob);
+  authenticatedFetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media')
+    .then(res => {
+      if (!res.ok) throw new Error('Drive returned ' + res.status);
+      return res.arrayBuffer();
+    })
+    .then(buf => {
+      const data = new Uint8Array(buf);
+      workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true });
+      resolveMasterSheet();
     })
     .catch(err => {
       console.error('Load error:', err);
-      showToast('Failed to load file. Try again.', 'error');
+      showToast('Failed to load file: ' + err.message, 'error');
     });
+}
+
+function afterWorkbookReady() {
+  showToast('File loaded: ' + (currentFile ? currentFile.name : ''), 'success');
+  ensureActivitiesSheet();
+  updateFileUI();
+  renderDashboard();
+  renderCompanies();
+}
+
+// ==================== SHEET RESOLUTION ====================
+// Score every sheet on how much it looks like a customer/opportunity table
+// instead of assuming the first sheet or a name containing "master"/"data".
+// If nothing scores confidently, ask the user (and remember their choice
+// per file so we don't ask again).
+function resolveMasterSheet() {
+  if (!workbook) return;
+  const remembered = currentFile ? localStorage.getItem('sba_master_sheet_' + currentFile.id) : null;
+  if (remembered && workbook.SheetNames.includes(remembered)) {
+    masterSheetName = remembered;
+    afterWorkbookReady();
+    return;
+  }
+
+  const scores = workbook.SheetNames.map(name => {
+    if (name === activitiesSheetName || name.toLowerCase() === 'settings') return { name, score: -1 };
+    const sheet = workbook.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (!rows.length) return { name, score: 0 };
+    const headers = rows[0].map(h => normalizeHeader(h));
+    let score = 0;
+    if (headers.some(h => HEADER_SYNONYMS.name.includes(h))) score += 3;
+    if (headers.some(h => HEADER_SYNONYMS.opp_status.includes(h))) score += 2;
+    if (headers.some(h => HEADER_SYNONYMS.sales_stage.includes(h))) score += 2;
+    if (headers.some(h => HEADER_SYNONYMS.industry.includes(h))) score += 1;
+    if (/master|tracker|data|customer|crm/i.test(name)) score += 1;
+    if (rows.length > 1) score += 1;
+    return { name, score };
+  });
+
+  scores.sort((a, b) => b.score - a.score);
+  const best = scores[0];
+  const second = scores[1];
+
+  if (best && best.score >= 4 && (!second || best.score - second.score >= 2)) {
+    masterSheetName = best.name;
+    if (currentFile) localStorage.setItem('sba_master_sheet_' + currentFile.id, masterSheetName);
+    afterWorkbookReady();
+  } else {
+    showChooseSheetModal(scores.filter(s => s.score >= 0));
+  }
+}
+
+function showChooseSheetModal(candidates) {
+  const container = document.getElementById('chooseSheetOptions');
+  container.innerHTML = candidates.map(c => `
+    <button class="btn btn-outline" style="margin-bottom:8px;" onclick="pickMasterSheet('${c.name.replace(/'/g, "\\'")}')">${c.name}</button>
+  `).join('');
+  openModal('modalChooseSheet');
+}
+
+function pickMasterSheet(name) {
+  masterSheetName = name;
+  if (currentFile) localStorage.setItem('sba_master_sheet_' + currentFile.id, name);
+  closeModal('modalChooseSheet');
+  afterWorkbookReady();
+}
+
+function ensureActivitiesSheet() {
+  if (!workbook) return;
+  if (!workbook.SheetNames.includes(activitiesSheetName)) {
+    const ws = XLSX.utils.aoa_to_sheet([ACTIVITY_HEADERS]);
+    workbook.SheetNames.push(activitiesSheetName);
+    workbook.Sheets[activitiesSheetName] = ws;
+  }
 }
 
 // ==================== SAVE TO DRIVE ====================
 function saveToDrive() {
+  if (!accessToken) { showToast('Please sign in first', 'error'); return; }
   if (!workbook || !currentFile) { showToast('No file loaded', 'error'); return; }
-  showSaveIndicator(true);
-  const wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  showSaveIndicator('saving');
+  let wbout;
+  try {
+    wbout = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  } catch (err) {
+    console.error('XLSX write error:', err);
+    showSaveIndicator('error', 'Could not build the Excel file');
+    return;
+  }
   const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const metadata = { name: currentFile.name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   const form = new FormData();
   form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
   form.append('file', blob);
-  fetch('https://www.googleapis.com/upload/drive/v3/files/' + currentFile.id + '?uploadType=multipart', {
+
+  authenticatedFetch('https://www.googleapis.com/upload/drive/v3/files/' + currentFile.id + '?uploadType=multipart', {
     method: 'PATCH',
-    headers: new Headers({ 'Authorization': 'Bearer ' + accessToken }),
     body: form
-  })
-  .then(res => {
-    if (res.ok) { showToast('Saved to Google Drive!', 'success'); showSaveIndicator(false); }
-    else { throw new Error('Upload failed'); }
-  })
-  .catch(err => {
+  }).then(res => {
+    if (!res.ok) throw new Error('Drive upload returned ' + res.status);
+    return res.json();
+  }).then(() => {
+    lastSavedAt = new Date();
+    showSaveIndicator('done');
+  }).catch(err => {
     console.error('Save error:', err);
-    showToast('Save failed. Check connection.', 'error');
-    showSaveIndicator(false);
+    showSaveIndicator('error', err.message);
   });
 }
 
@@ -557,6 +986,35 @@ function downloadFile() {
   showToast('File downloaded', 'success');
 }
 
+function showSaveIndicator(state, errMsg) {
+  const el = document.getElementById('saveIndicator');
+  const saveBtn = document.getElementById('saveBtn');
+  if (state === 'saving') {
+    el.className = 'save-indicator show saving';
+    el.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.4);border-top-color:white;border-radius:50%;animation:spin 0.8s linear infinite;"></span> Saving…';
+    if (saveBtn) saveBtn.disabled = true;
+  } else if (state === 'done') {
+    el.className = 'save-indicator show';
+    const t = lastSavedAt.toTimeString().slice(0,5);
+    el.textContent = 'Saved successfully at ' + t;
+    document.getElementById('lastSavedText').textContent = 'Last saved at ' + t;
+    if (saveBtn) saveBtn.disabled = false;
+    setTimeout(() => { el.className = 'save-indicator'; }, 3000);
+    showToast('Saved to Google Drive', 'success');
+  } else {
+    el.className = 'save-indicator show error';
+    el.textContent = 'Save failed — ' + (errMsg || 'unknown error');
+    if (saveBtn) saveBtn.disabled = false;
+    showToast('Save failed: ' + (errMsg || 'unknown error'), 'error');
+    setTimeout(() => { el.className = 'save-indicator'; }, 5000);
+  }
+}
+
+// keyframe used by the spinner above
+const styleEl = document.createElement('style');
+styleEl.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+document.head.appendChild(styleEl);
+
 // ==================== UI UPDATES ====================
 function updateFileUI() {
   if (!currentFile) return;
@@ -568,73 +1026,131 @@ function updateFileUI() {
   document.getElementById('activeFileName').textContent = currentFile.name;
 }
 
-function showSaveIndicator(saving) {
-  const el = document.getElementById('saveIndicator');
-  if (saving) { el.className = 'save-indicator show saving'; el.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-radius:50%;border-top-color:white;animation:spin 0.8s linear infinite;"></span> Saving...'; }
-  else { el.className = 'save-indicator show'; el.innerHTML = 'Saved to Drive'; setTimeout(() => el.className = 'save-indicator', 2000); }
-}
-
 // ==================== NAVIGATION ====================
 function navigate(screen) {
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + screen).classList.add('active');
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  const titles = {dashboard:'Dashboard',companies:'Companies',edit:'Edit Company',sheets:'Excel Sheets',drive:'Google Drive'};
+  const target = document.getElementById('screen-' + screen);
+  if (target) target.classList.add('active');
+  document.querySelectorAll('.nav-item, .nav-link').forEach(n => n.classList.toggle('active', n.dataset.screen === screen));
+  const titles = {dashboard:'Dashboard',companies:'Companies',edit:'Edit Company',activities:'Activities',pipeline:'Pipeline',reports:'Reports',sheets:'Excel Sheets',drive:'Google Drive'};
   const pt = document.getElementById('pageTitle');
   if (pt) pt.textContent = titles[screen] || 'SBA Drive';
   if (screen === 'companies') renderCompanies();
   if (screen === 'sheets') renderSheets();
   if (screen === 'drive') listDriveFiles();
+  if (screen === 'activities') renderActivities();
+  if (screen === 'pipeline') renderPipeline();
+  if (screen === 'reports') renderReport();
   window.scrollTo(0, 0);
 }
 
+// ==================== HEADER MAPPING ====================
+function normalizeHeader(h) {
+  return String(h == null ? '' : h).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function buildHeaderMap(headers) {
+  // canonicalKey -> column index, using synonym matching (falls back to
+  // exact normalized match for any header not covered by a synonym list)
+  const normalized = headers.map(h => normalizeHeader(h));
+  const map = {};
+  Object.keys(HEADER_SYNONYMS).forEach(canonical => {
+    const variants = HEADER_SYNONYMS[canonical];
+    const idx = normalized.findIndex(h => variants.includes(h));
+    if (idx !== -1) map[canonical] = idx;
+  });
+  // also expose every raw header under its own normalized name, so custom
+  // columns (e.g. application_type) still round-trip untouched
+  normalized.forEach((h, i) => { if (map[h] === undefined) map[h] = i; });
+  return map;
+}
+
 // ==================== EXCEL DATA HELPERS ====================
+function getMasterSheetData() {
+  if (!workbook || !masterSheetName || !workbook.Sheets[masterSheetName]) return null;
+  const sheet = workbook.Sheets[masterSheetName];
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+}
+
 function getCompaniesFromWorkbook() {
-  if (!workbook) return [];
-  const sheetNames = workbook.SheetNames;
-  let targetSheet = null;
-  let targetName = '';
-  for (const name of sheetNames) {
-    const lower = name.toLowerCase();
-    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) {
-      targetSheet = workbook.Sheets[name]; targetName = name; break;
-    }
-  }
-  if (!targetSheet) { targetSheet = workbook.Sheets[sheetNames[0]]; targetName = sheetNames[0]; }
-  const data = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: '' });
-  if (data.length < 2) return [];
+  const data = getMasterSheetData();
+  if (!data || data.length < 1) return [];
   const headers = data[0].map(h => String(h).trim());
+  const headerMap = buildHeaderMap(headers);
   const companies = [];
   for (let i = 1; i < data.length; i++) {
     const row = data[i];
-    if (!row[0] && !row[1]) continue;
-    const company = { _rowIndex: i, _sheetName: targetName };
-    headers.forEach((h, idx) => { company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : ''; });
-    company._headers = headers;
+    const nameIdx = headerMap.name;
+    if (nameIdx === undefined) continue;
+    if (row.every(c => c === '' || c === undefined || c === null)) continue;
+    if (!row[nameIdx]) continue;
+    const company = { _rowIndex: i, _sheetName: masterSheetName, _headerMap: headerMap, _headers: headers };
+    Object.keys(headerMap).forEach(key => { company[key] = row[headerMap[key]] !== undefined ? row[headerMap[key]] : ''; });
     companies.push(company);
   }
   return companies;
 }
 
-function normalizeHeader(h) {
-  return String(h).toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-}
-
 function getHeaderMap(sheetName) {
-  if (!workbook) return {};
-  const sheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (data.length === 0) return {};
-  const map = {};
-  data[0].forEach((h, i) => { map[normalizeHeader(h)] = { original: h, index: i }; });
-  return map;
+  if (!workbook || !workbook.Sheets[sheetName]) return {};
+  const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
+  if (!data.length) return {};
+  return buildHeaderMap(data[0].map(h => String(h).trim()));
 }
 
 // ==================== DASHBOARD ====================
+function startOfDay(d) { const x = new Date(d); x.setHours(0,0,0,0); return x; }
+function todayStart() { return startOfDay(new Date()); }
+function daysBetween(a, b) { return Math.round((startOfDay(a) - startOfDay(b)) / 86400000); }
+
+function parseDateCell(v) {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+  if (typeof v === 'number') { const d = XLSX.SSF ? XLSX.SSF.parse_date_code(v) : null; if (d) return new Date(d.y, d.m - 1, d.d); }
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function getActivities() {
+  if (!workbook || !workbook.Sheets[activitiesSheetName]) return [];
+  const data = XLSX.utils.sheet_to_json(workbook.Sheets[activitiesSheetName], { header: 1, defval: '' });
+  if (data.length < 1) return [];
+  const headers = data[0].map(h => String(h).trim());
+  const idx = {};
+  headers.forEach((h, i) => { idx[normalizeHeader(h)] = i; });
+  const rows = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (row.every(c => c === '' || c === undefined || c === null)) continue;
+    rows.push({
+      _rowIndex: i,
+      Activity_ID: row[idx['activityid']] || '',
+      Date: row[idx['date']] || '',
+      Company: row[idx['company']] || '',
+      Contact_Person: row[idx['contactperson']] || '',
+      Activity_Type: row[idx['activitytype']] || '',
+      Subject: row[idx['subject']] || '',
+      Description: row[idx['description']] || '',
+      Opportunity: row[idx['opportunity']] || '',
+      Result: row[idx['result']] || '',
+      Follow_Up_Action: row[idx['followupaction']] || '',
+      Next_Follow_Up: row[idx['nextfollowup']] || '',
+      Status: row[idx['status']] || '',
+      Notes: row[idx['notes']] || ''
+    });
+  }
+  return rows;
+}
+
 function renderDashboard() {
-  if (!workbook) return;
+  if (!workbook || !masterSheetName) return;
   const companies = getCompaniesFromWorkbook();
+  const activities = getActivities();
+  const now = new Date();
+  const weekStart = startOfDay(new Date(now)); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
+
   const hot = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'hot').length;
   const warm = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'warm').length;
   const cold = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'cold').length;
@@ -642,45 +1158,92 @@ function renderDashboard() {
   document.getElementById('kpiWarm').textContent = warm;
   document.getElementById('kpiCold').textContent = cold;
   document.getElementById('kpiTotal').textContent = companies.length;
-  const recent = companies.slice(-5).reverse();
-  document.getElementById('recentActivity').innerHTML = recent.map(c => `
-    <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(${c._rowIndex},'${c._sheetName}')">
-      <div><div style="font-weight:600;font-size:14px;">${c.name || 'Unnamed'}</div><div style="font-size:12px;color:var(--text-light);">${c.industry || ''}</div></div>
-      <span class="badge badge-${String(c.opp_status||'').toLowerCase()}">${c.opp_status || ''}</span>
-    </div>
-  `).join('') || '<p class="empty-state">No companies</p>';
+
+  const actThisWeek = activities.filter(a => { const d = parseDateCell(a.Date); return d && d >= weekStart && d < weekEnd; });
+  document.getElementById('kpiActWeek').textContent = actThisWeek.length;
+  document.getElementById('kpiVisitWeek').textContent = actThisWeek.filter(a => a.Activity_Type === 'Visit').length;
+  document.getElementById('kpiCallWeek').textContent = actThisWeek.filter(a => a.Activity_Type === 'Phone Call').length;
+
+  const overdue = activities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) < 0 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+  document.getElementById('kpiOverdue').textContent = overdue.length;
+
+  // Today / upcoming follow-ups
+  const todayList = activities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) === 0 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+  const upcomingList = activities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) > 0 && daysBetween(d, todayStart()) <= 7 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+
+  document.getElementById('followupTodayCard').style.display = todayList.length ? 'block' : 'none';
+  document.getElementById('followupTodayCount').textContent = todayList.length;
+  document.getElementById('followupToday').innerHTML = todayList.map(a => followupRow(a, 'today')).join('') || '<p class="empty-state">Nothing due today</p>';
+
+  document.getElementById('followupUpcomingCard').style.display = upcomingList.length ? 'block' : 'none';
+  document.getElementById('followupUpcoming').innerHTML = upcomingList.map(a => followupRow(a, 'upcoming')).join('');
+
+  const hotList = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'hot');
+  document.getElementById('hotOppCard').style.display = hotList.length ? 'block' : 'none';
+  document.getElementById('hotOppList').innerHTML = hotList.slice(0, 8).map(c => `
+    <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(${c._rowIndex},'${escAttr(c._sheetName)}')">
+      <div style="font-weight:600;font-size:14px;">${esc(c.name || 'Unnamed')}</div>
+      <div style="font-size:12px;color:var(--text-light);">${esc(c.sales_stage || '')}</div>
+    </div>`).join('') || '';
+
+  const recent = activities.slice(-10).reverse();
+  document.getElementById('recentActivity').innerHTML = recent.map(a => `
+    <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div><div style="font-weight:600;font-size:14px;">${esc(a.Company||'')}</div><div style="font-size:12px;color:var(--text-light);">${esc(a.Activity_Type||'')} &bull; ${esc(fmtDate(a.Date))}</div></div>
+    </div>`).join('') || '<p class="empty-state">No activities logged yet</p>';
 }
+
+function followupRow(a, kind) {
+  const badgeClass = kind === 'today' ? 'badge-today' : 'badge-upcoming';
+  const badgeLabel = kind === 'today' ? 'Today' : fmtDate(a.Next_Follow_Up);
+  return `<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border);">
+    <div><div style="font-weight:600;font-size:14px;">${esc(a.Company||'')}</div><div style="font-size:12px;color:var(--text-light);">${esc(a.Follow_Up_Action||a.Subject||'')}</div></div>
+    <span class="badge ${badgeClass}">${esc(badgeLabel)}</span>
+  </div>`;
+}
+
+function fmtDate(v) {
+  const d = parseDateCell(v);
+  if (!d) return String(v || '');
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escAttr(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
 
 // ==================== COMPANIES LIST ====================
 function renderCompanies() {
+  if (!workbook || !masterSheetName) { document.getElementById('companyList').innerHTML = '<div class="empty-state"><p>Load a workbook first</p></div>'; return; }
   const companies = getCompaniesFromWorkbook();
-  const search = document.getElementById('companySearch').value.toLowerCase();
+  const search = (document.getElementById('companySearch').value || '').toLowerCase();
   let list = companies;
-  if (search) list = list.filter(c => String(c.name||'').toLowerCase().includes(search) || String(c.industry||'').toLowerCase().includes(search));
+  if (search) {
+    list = list.filter(c => [c.name, c.brand_name, c.industry, c.contact_person, c.phone].some(v => String(v||'').toLowerCase().includes(search)));
+  }
   if (companyFilter !== 'all') list = list.filter(c => String(c.opp_status||'').toLowerCase() === companyFilter.toLowerCase());
   document.getElementById('companyList').innerHTML = list.map(c => `
-    <div class="company-card" onclick="editCompany(${c._rowIndex},'${c._sheetName}')">
+    <div class="company-card" onclick="editCompany(${c._rowIndex},'${escAttr(c._sheetName)}')">
       <div class="company-header">
-        <div class="company-name">${c.name || 'Unnamed'}</div>
-        <span class="badge badge-${String(c.opp_status||'').toLowerCase()}">${c.opp_status || ''}</span>
+        <div class="company-name">${esc(c.name || 'Unnamed')}</div>
+        <span class="badge badge-${String(c.opp_status||'').toLowerCase()}">${esc(c.opp_status || '')}</span>
       </div>
       <div class="company-meta">
-        <span class="badge badge-industry">${c.industry || ''}</span>
-        ${c.sales_stage ? `<span class="badge" style="background:#e8eaf6;color:#3f51b5;">${c.sales_stage}</span>` : ''}
+        ${c.industry ? `<span class="badge badge-industry">${esc(c.industry)}</span>` : ''}
+        ${c.sales_stage ? `<span class="badge" style="background:#e8eaf6;color:#3f51b5;">${esc(c.sales_stage)}</span>` : ''}
         ${c.est_value ? `<span class="badge" style="background:#e0f2f1;color:#00695c;">ETB ${formatNum(c.est_value)}</span>` : ''}
       </div>
       <div class="company-location">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-        ${c.location || 'No location'} ${c.contact_person ? '&bull; ' + c.contact_person : ''}
+        ${esc(c.location || 'No location')} ${c.contact_person ? '&bull; ' + esc(c.contact_person) : ''}
       </div>
     </div>
   `).join('') || '<div class="empty-state"><p>No companies found</p></div>';
 }
 
-function setFilter(f) {
+function setFilter(f, btnEl) {
   companyFilter = f;
   document.querySelectorAll('#screen-companies .filter-chip').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  if (btnEl) btnEl.classList.add('active');
   renderCompanies();
 }
 
@@ -691,17 +1254,18 @@ function formatNum(n) {
 
 // ==================== EDIT COMPANY ====================
 function editCompany(rowIndex, sheetName) {
-  if (!workbook) return;
-  const sheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!workbook || !workbook.Sheets[sheetName]) return;
+  const data = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, defval: '' });
   if (data.length <= rowIndex) return;
   const headers = data[0].map(h => String(h).trim());
+  const headerMap = buildHeaderMap(headers);
   const row = data[rowIndex];
   editingCompanyIndex = rowIndex;
   editingSheetName = sheetName;
 
   const company = {};
-  headers.forEach((h, i) => { company[normalizeHeader(h)] = row[i] !== undefined ? row[i] : ''; });
+  Object.keys(headerMap).forEach(key => { company[key] = row[headerMap[key]] !== undefined ? row[headerMap[key]] : ''; });
+  editingCompanyName = company.name || '';
 
   document.getElementById('editCompanyName').textContent = company.name || 'Edit Company';
   document.getElementById('editCompanyIndustry').textContent = company.industry || 'No industry';
@@ -727,22 +1291,39 @@ function editCompany(rowIndex, sheetName) {
     if (f.type === 'select') {
       return `<div class="form-group"><label class="form-label">${f.label}</label><select class="form-select" id="edit_${f.key}">${f.options.map(o => `<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join('')}</select></div>`;
     } else if (f.type === 'textarea') {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><textarea class="form-textarea" id="edit_${f.key}">${val}</textarea></div>`;
+      return `<div class="form-group"><label class="form-label">${f.label}</label><textarea class="form-textarea" id="edit_${f.key}">${esc(val)}</textarea></div>`;
     } else {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><input type="${f.type}" class="form-input" id="edit_${f.key}" value="${val}"></div>`;
+      return `<div class="form-group"><label class="form-label">${f.label}</label><input type="${f.type}" class="form-input" id="edit_${f.key}" value="${esc(val)}"></div>`;
     }
   }).join('');
 
+  renderCompanyActivityHistory(editingCompanyName);
   navigate('edit');
 }
+
+function renderCompanyActivityHistory(companyName) {
+  const activities = getActivities().filter(a => String(a.Company||'').trim().toLowerCase() === String(companyName||'').trim().toLowerCase());
+  activities.sort((a,b) => { const da = parseDateCell(a.Date), db = parseDateCell(b.Date); return (db?db.getTime():0) - (da?da.getTime():0); });
+  document.getElementById('editCompanyActivities').innerHTML = activities.map(a => `
+    <div class="activity-item">
+      <div class="activity-date-box"><div class="d">${fmtDay(a.Date)}</div><div class="m">${fmtMon(a.Date)}</div></div>
+      <div class="activity-body">
+        <div class="activity-type-tag">${esc(a.Activity_Type)}</div>
+        <div class="activity-desc">${esc(a.Subject ? a.Subject + ' — ' : '')}${esc(a.Description || a.Result || '')}</div>
+      </div>
+    </div>
+  `).join('') || '<p class="empty-state">No activity logged for this company yet</p>';
+}
+
+function fmtDay(v) { const d = parseDateCell(v); return d ? String(d.getDate()).padStart(2,'0') : '--'; }
+function fmtMon(v) { const d = parseDateCell(v); return d ? d.toLocaleDateString('en-GB',{month:'short'}) : ''; }
 
 function saveCompanyEdit() {
   if (!workbook || editingCompanyIndex < 0 || !editingSheetName) return;
   const sheet = workbook.Sheets[editingSheetName];
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   const headers = data[0].map(h => String(h).trim());
-  const headerMap = {};
-  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
+  const headerMap = buildHeaderMap(headers);
 
   const row = data[editingCompanyIndex];
   const fields = ['name','brand_name','industry','location','opp_status','sales_stage','priority','est_value','probability','contact_person','phone','notes'];
@@ -751,46 +1332,42 @@ function saveCompanyEdit() {
     if (el && headerMap[f] !== undefined) row[headerMap[f]] = el.value;
   });
 
-  // Auto-calculate exp_revenue
-  if (headerMap['exp_revenue'] !== undefined && headerMap['est_value'] !== undefined && headerMap['probability'] !== undefined) {
+  if (headerMap['exp_revenue'] !== undefined) {
     const val = parseFloat(row[headerMap['est_value']]) || 0;
     const prob = parseFloat(row[headerMap['probability']]) || 0;
-    row[headerMap['exp_revenue']] = val * prob / 100;
+    row[headerMap['exp_revenue']] = Math.round(val * prob) / 100;
   }
 
   const newSheet = XLSX.utils.aoa_to_sheet(data);
   workbook.Sheets[editingSheetName] = newSheet;
 
-  showToast('Company updated! Save to Drive to persist.', 'success');
+  showToast('Company updated. Remember to Save to Drive.', 'success');
   navigate('companies');
-  renderCompanies();
   renderDashboard();
 }
 
 // ==================== ADD COMPANY ====================
-function openAddCompany() { openModal('modalAddCompany'); }
+function openAddCompany() {
+  if (!workbook || !masterSheetName) { showToast('Load a workbook first', 'error'); return; }
+  openModal('modalAddCompany');
+}
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 
 function saveCompany() {
-  if (!workbook) { showToast('Load a file first', 'error'); return; }
+  if (!workbook || !masterSheetName) { showToast('Load a file first', 'error'); return; }
   const name = document.getElementById('acName').value.trim();
   const industry = document.getElementById('acIndustry').value;
   if (!name || !industry) { showToast('Name and industry required', 'error'); return; }
 
-  // Find the main data sheet
-  let targetName = '';
-  for (const n of workbook.SheetNames) {
-    const lower = n.toLowerCase();
-    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) { targetName = n; break; }
-  }
-  if (!targetName) targetName = workbook.SheetNames[0];
-
-  const sheet = workbook.Sheets[targetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const data = getMasterSheetData();
   const headers = data[0].map(h => String(h).trim());
-  const headerMap = {};
-  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
+  const headerMap = buildHeaderMap(headers);
+
+  // duplicate guard
+  const nameIdx = headerMap.name;
+  const dup = data.slice(1).some(r => String(r[nameIdx]||'').trim().toLowerCase() === name.toLowerCase());
+  if (dup) { showToast('A company with this name already exists', 'warning'); return; }
 
   const newRow = new Array(headers.length).fill('');
   const setVal = (key, val) => { if (headerMap[key] !== undefined) newRow[headerMap[key]] = val; };
@@ -806,36 +1383,217 @@ function saveCompany() {
   const prob = parseInt(document.getElementById('acProb').value) || 0;
   setVal('est_value', val);
   setVal('probability', prob);
-  setVal('exp_revenue', val * prob / 100);
+  setVal('exp_revenue', Math.round(val * prob) / 100);
   setVal('contact_person', document.getElementById('acContact').value.trim());
   setVal('phone', document.getElementById('acPhone').value.trim());
   setVal('notes', document.getElementById('acNotes').value.trim());
-  setVal('application_type', 'Date Coding');
-  setVal('number_of_technologies', 0);
-  setVal('number_of_brands', 1);
-  setVal('number_of_machines', 0);
 
   data.push(newRow);
-  const newSheet = XLSX.utils.aoa_to_sheet(data);
-  workbook.Sheets[targetName] = newSheet;
+  workbook.Sheets[masterSheetName] = XLSX.utils.aoa_to_sheet(data);
 
   closeModal('modalAddCompany');
-  document.getElementById('acName').value = '';
-  document.getElementById('acBrand').value = '';
-  document.getElementById('acLocation').value = '';
-  document.getElementById('acValue').value = '';
-  document.getElementById('acNotes').value = '';
+  ['acName','acBrand','acLocation','acValue','acNotes','acContact','acPhone'].forEach(id => document.getElementById(id).value = '');
 
-  showToast('Company added! Save to Drive.', 'success');
+  showToast('Company added. Remember to Save to Drive.', 'success');
   renderCompanies();
   renderDashboard();
 }
 
-// ==================== SHEETS VIEW ====================
+// ==================== ACTIVITIES ====================
+function openAddActivity(prefillCompany) {
+  if (!workbook) { showToast('Load a file first', 'error'); return; }
+  document.getElementById('aaDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('aaCompany').value = prefillCompany || '';
+  document.getElementById('aaContact').value = '';
+  document.getElementById('aaType').value = 'Visit';
+  document.getElementById('aaSubject').value = '';
+  document.getElementById('aaDescription').value = '';
+  document.getElementById('aaResult').value = '';
+  document.getElementById('aaFollowupAction').value = '';
+  document.getElementById('aaNextFollowup').value = '';
+  document.getElementById('aaStatus').value = 'Open';
+  document.getElementById('aaNotes').value = '';
+
+  const companies = getCompaniesFromWorkbook();
+  document.getElementById('companyDatalist').innerHTML = companies.map(c => `<option value="${esc(c.name)}">`).join('');
+
+  openModal('modalAddActivity');
+}
+
+function generateActivityId() {
+  return 'ACT-' + Date.now().toString(36).toUpperCase() + '-' + Math.floor(Math.random()*900+100);
+}
+
+function saveActivity() {
+  const company = document.getElementById('aaCompany').value.trim();
+  const date = document.getElementById('aaDate').value;
+  if (!company || !date) { showToast('Date and customer are required', 'error'); return; }
+
+  ensureActivitiesSheet();
+  const sheet = workbook.Sheets[activitiesSheetName];
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (data.length === 0) data.push(ACTIVITY_HEADERS);
+
+  const row = [
+    generateActivityId(),
+    date,
+    company,
+    document.getElementById('aaContact').value.trim(),
+    document.getElementById('aaType').value,
+    document.getElementById('aaSubject').value.trim(),
+    document.getElementById('aaDescription').value.trim(),
+    '',
+    document.getElementById('aaResult').value.trim(),
+    document.getElementById('aaFollowupAction').value.trim(),
+    document.getElementById('aaNextFollowup').value,
+    document.getElementById('aaStatus').value,
+    document.getElementById('aaNotes').value.trim()
+  ];
+  data.push(row);
+  workbook.Sheets[activitiesSheetName] = XLSX.utils.aoa_to_sheet(data);
+
+  closeModal('modalAddActivity');
+  showToast('Activity logged. Remember to Save to Drive.', 'success');
+  renderDashboard();
+  if (currentScreen === 'activities') renderActivities();
+  if (currentScreen === 'edit') renderCompanyActivityHistory(editingCompanyName);
+  if (currentScreen === 'pipeline') renderPipeline();
+}
+
+function renderActivities() {
+  if (!workbook) { document.getElementById('activityList').innerHTML = '<div class="empty-state"><p>Load a workbook first</p></div>'; return; }
+  const types = ['all','Visit','Phone Call','WhatsApp','Email','Meeting','Follow-up','Technical Discussion','Demo','Quotation','Other'];
+  document.getElementById('activityTypeFilterBar').innerHTML = types.map(t => `<button class="filter-chip ${t===activityTypeFilter?'active':''}" onclick="setActivityTypeFilter('${t.replace(/'/g,"\\'")}',this)">${t === 'all' ? 'All' : t}</button>`).join('');
+
+  let activities = getActivities();
+  const search = (document.getElementById('activitySearch').value || '').toLowerCase();
+  if (search) activities = activities.filter(a => [a.Company, a.Contact_Person, a.Subject, a.Description].some(v => String(v||'').toLowerCase().includes(search)));
+  if (activityTypeFilter !== 'all') activities = activities.filter(a => a.Activity_Type === activityTypeFilter);
+  activities.sort((a,b) => { const da = parseDateCell(a.Date), db = parseDateCell(b.Date); return (db?db.getTime():0) - (da?da.getTime():0); });
+
+  document.getElementById('activityList').innerHTML = activities.map(a => `
+    <div class="activity-item">
+      <div class="activity-date-box"><div class="d">${fmtDay(a.Date)}</div><div class="m">${fmtMon(a.Date)}</div></div>
+      <div class="activity-body">
+        <div class="activity-type-tag">${esc(a.Activity_Type)}</div>
+        <div class="activity-company">${esc(a.Company)}</div>
+        <div class="activity-desc">${esc(a.Subject ? a.Subject + ' — ' : '')}${esc(a.Description || a.Result || '')}</div>
+        ${a.Next_Follow_Up ? `<div style="margin-top:4px;"><span class="badge badge-upcoming">Next: ${esc(fmtDate(a.Next_Follow_Up))}</span></div>` : ''}
+      </div>
+    </div>
+  `).join('') || '<div class="empty-state"><p>No activities found</p></div>';
+}
+
+function setActivityTypeFilter(t, el) { activityTypeFilter = t; renderActivities(); }
+
+// ==================== PIPELINE ====================
+const PIPELINE_STAGES = ['Lead','Qualified','Need Identified','Technical Discussion','Demo / Sample','Proposal Sent','Negotiation','Waiting Customer Decision','Purchase Order','Won','Lost'];
+
+function renderPipeline() {
+  if (!workbook || !masterSheetName) { document.getElementById('pipelineStages').innerHTML = '<div class="empty-state"><p>Load a workbook first</p></div>'; return; }
+  const companies = getCompaniesFromWorkbook();
+  const maxCount = Math.max(1, ...PIPELINE_STAGES.map(st => companies.filter(c => c.sales_stage === st).length));
+  document.getElementById('pipelineStages').innerHTML = PIPELINE_STAGES.map(st => {
+    const inStage = companies.filter(c => c.sales_stage === st);
+    const totalVal = inStage.reduce((s,c) => s + (parseFloat(c.est_value) || 0), 0);
+    const pct = Math.round((inStage.length / maxCount) * 100);
+    return `<div class="pipeline-stage">
+      <div class="pipeline-stage-header"><span>${esc(st)}</span><span>${inStage.length}</span></div>
+      <div class="pipeline-bar-track"><div class="pipeline-bar-fill" style="width:${pct}%;"></div></div>
+      <div class="pipeline-stage-meta"><span>${inStage.length} compan${inStage.length===1?'y':'ies'}</span><span>ETB ${formatNum(totalVal)}</span></div>
+    </div>`;
+  }).join('');
+}
+
+// ==================== REPORTS ====================
+function setReportRange(mode, btnEl) {
+  reportRangeMode = mode;
+  document.querySelectorAll('#screen-reports .report-range .filter-chip').forEach(b => b.classList.remove('active'));
+  if (btnEl) btnEl.classList.add('active');
+  document.getElementById('customRangeInputs').style.display = mode === 'custom' ? 'block' : 'none';
+  renderReport();
+}
+
+function getReportRange() {
+  const now = new Date();
+  if (reportRangeMode === 'custom') {
+    const from = document.getElementById('reportFrom').value;
+    const to = document.getElementById('reportTo').value;
+    if (from && to) return { from: startOfDay(new Date(from)), to: startOfDay(new Date(to)) };
+    return { from: todayStart(), to: todayStart() };
+  }
+  const weekStart = startOfDay(new Date(now)); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+  if (reportRangeMode === 'last') {
+    const from = new Date(weekStart); from.setDate(from.getDate() - 7);
+    const to = new Date(weekStart); to.setDate(to.getDate() - 1);
+    return { from, to };
+  }
+  const to = new Date(weekStart); to.setDate(to.getDate() + 6);
+  return { from: weekStart, to };
+}
+
+function renderReport() {
+  if (!workbook) { return; }
+  const { from, to } = getReportRange();
+  document.getElementById('reportRangeLabel').textContent = fmtDate(from) + ' — ' + fmtDate(to);
+
+  const activities = getActivities().filter(a => { const d = parseDateCell(a.Date); return d && d >= from && d <= to; });
+  const counts = {};
+  ['Visit','Phone Call','WhatsApp','Email','Meeting','Follow-up','Technical Discussion','Demo','Quotation','Other'].forEach(t => counts[t] = 0);
+  activities.forEach(a => { if (counts[a.Activity_Type] !== undefined) counts[a.Activity_Type]++; else counts.Other++; });
+
+  document.getElementById('reportActivitySummary').innerHTML = `
+    <div class="stat-row"><span>Total activities</span><span class="n">${activities.length}</span></div>
+    <div class="stat-row"><span>Customer visits</span><span class="n">${counts['Visit']}</span></div>
+    <div class="stat-row"><span>Phone calls</span><span class="n">${counts['Phone Call']}</span></div>
+    <div class="stat-row"><span>WhatsApp messages</span><span class="n">${counts['WhatsApp']}</span></div>
+    <div class="stat-row"><span>Emails</span><span class="n">${counts['Email']}</span></div>
+    <div class="stat-row"><span>Meetings</span><span class="n">${counts['Meeting']}</span></div>
+    <div class="stat-row"><span>Follow-ups</span><span class="n">${counts['Follow-up']}</span></div>
+  `;
+
+  const companies = masterSheetName ? getCompaniesFromWorkbook() : [];
+  const hot = companies.filter(c => String(c.opp_status||'').toLowerCase()==='hot').length;
+  const warm = companies.filter(c => String(c.opp_status||'').toLowerCase()==='warm').length;
+  const cold = companies.filter(c => String(c.opp_status||'').toLowerCase()==='cold').length;
+  const won = companies.filter(c => c.sales_stage === 'Won').length;
+  const lost = companies.filter(c => c.sales_stage === 'Lost').length;
+  const proposal = companies.filter(c => c.sales_stage === 'Proposal Sent').length;
+  const negotiation = companies.filter(c => c.sales_stage === 'Negotiation').length;
+
+  document.getElementById('reportOppSummary').innerHTML = `
+    <div class="stat-row"><span>Hot opportunities</span><span class="n">${hot}</span></div>
+    <div class="stat-row"><span>Warm opportunities</span><span class="n">${warm}</span></div>
+    <div class="stat-row"><span>Cold opportunities</span><span class="n">${cold}</span></div>
+    <div class="stat-row"><span>Proposals sent</span><span class="n">${proposal}</span></div>
+    <div class="stat-row"><span>In negotiation</span><span class="n">${negotiation}</span></div>
+    <div class="stat-row"><span>Won</span><span class="n">${won}</span></div>
+    <div class="stat-row"><span>Lost</span><span class="n">${lost}</span></div>
+  `;
+
+  const allActivities = getActivities();
+  const overdue = allActivities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) < 0 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+  const dueToday = allActivities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) === 0 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+  const upcoming = allActivities.filter(a => { const d = parseDateCell(a.Next_Follow_Up); return d && daysBetween(d, todayStart()) > 0 && a.Status !== 'Completed' && a.Status !== 'Cancelled'; });
+  document.getElementById('reportFollowups').innerHTML = `
+    <div class="stat-row"><span>Overdue</span><span class="n" style="color:var(--danger);">${overdue.length}</span></div>
+    <div class="stat-row"><span>Due today</span><span class="n" style="color:var(--warning);">${dueToday.length}</span></div>
+    <div class="stat-row"><span>Upcoming</span><span class="n">${upcoming.length}</span></div>
+  `;
+
+  const table = document.getElementById('reportActivityTable');
+  table.innerHTML = '<tr><th>Date</th><th>Customer</th><th>Contact</th><th>Activity</th><th>Discussion</th><th>Follow-up</th></tr>' +
+    activities.map(a => `<tr>
+      <td>${esc(fmtDate(a.Date))}</td><td>${esc(a.Company)}</td><td>${esc(a.Contact_Person)}</td>
+      <td>${esc(a.Activity_Type)}</td><td>${esc(a.Subject || a.Description)}</td><td>${esc(a.Follow_Up_Action)}</td>
+    </tr>`).join('');
+}
+
+// ==================== SHEETS VIEW (read-only) ====================
 function renderSheets() {
   if (!workbook) { document.getElementById('sheetTabs').innerHTML = ''; document.getElementById('sheetContent').innerHTML = '<p class="empty-state">No file loaded</p>'; return; }
-  const tabs = workbook.SheetNames.map((name, i) => 
-    `<button class="sheet-tab ${i===currentSheet?'active':''}" onclick="showSheet(${i})">${name}</button>`
+  const tabs = workbook.SheetNames.map((name, i) =>
+    `<button class="sheet-tab ${i===currentSheet?'active':''}" onclick="showSheet(${i})">${esc(name)}${name===masterSheetName?' ★':''}</button>`
   ).join('');
   document.getElementById('sheetTabs').innerHTML = tabs;
   showSheet(currentSheet);
@@ -849,18 +1607,18 @@ function showSheet(index) {
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
   if (data.length === 0) { document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Empty sheet</p>'; return; }
   const maxRows = Math.min(data.length, 50);
-  const maxCols = Math.min(data[0].length, 10);
-  let html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  const maxCols = Math.min(data[0].length, 12);
+  let html = '<div class="mini-table-wrap"><table class="mini-table">';
   for (let r = 0; r < maxRows; r++) {
     html += '<tr>';
     for (let c = 0; c < maxCols; c++) {
       const val = data[r][c] !== undefined ? data[r][c] : '';
-      if (r === 0) html += `<th style="background:var(--primary);color:white;padding:8px;text-align:left;font-size:11px;white-space:nowrap;">${val}</th>`;
-      else html += `<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;">${val}</td>`;
+      if (r === 0) html += `<th>${esc(val)}</th>`;
+      else html += `<td style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;">${esc(val)}</td>`;
     }
     html += '</tr>';
   }
-  if (data.length > 50) html += `<tr><td colspan="${maxCols}" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">... ${data.length - 50} more rows</td></tr>`;
+  if (data.length > 50) html += `<tr><td colspan="${maxCols}" style="padding:12px;text-align:center;color:var(--text-light);">... ${data.length - 50} more rows</td></tr>`;
   html += '</table></div>';
   document.getElementById('sheetContent').innerHTML = html;
 }
@@ -868,27 +1626,32 @@ function showSheet(index) {
 // ==================== DRIVE FILES LIST ====================
 function listDriveFiles() {
   if (!accessToken) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Sign in to see files</p>'; return; }
-  gapi.client.drive.files.list({
-    q: "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel'",
-    pageSize: 20, fields: 'files(id,name,modifiedTime,size)'
-  }).then(response => {
-    const files = response.result.files;
-    if (!files || files.length === 0) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">No Excel files found in Drive</p>'; return; }
-    document.getElementById('driveFilesList').innerHTML = files.map(f => `
-      <div class="file-card" onclick="selectDriveFile('${f.id}', '${f.name.replace(/'/g, "\'")}')">
-        <div class="file-icon">📊</div>
-        <div class="file-info"><div class="file-name">${f.name}</div><div class="file-meta">${new Date(f.modifiedTime).toLocaleDateString()} &bull; Tap to open</div></div>
-      </div>
-    `).join('');
-  }).catch(err => {
-    console.error('List error:', err);
-    document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Failed to list files</p>';
-  });
+  document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Loading…</p>';
+  authenticatedFetch('https://www.googleapis.com/drive/v3/files?' + new URLSearchParams({
+    q: "(mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel') and trashed=false",
+    pageSize: '25', fields: 'files(id,name,modifiedTime)'
+  }))
+    .then(res => { if (!res.ok) throw new Error('Drive returned ' + res.status); return res.json(); })
+    .then(result => {
+      const files = result.files;
+      if (!files || files.length === 0) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">No Excel files found in Drive</p>'; return; }
+      document.getElementById('driveFilesList').innerHTML = files.map(f => `
+        <div class="file-card" onclick="selectDriveFile('${escAttr(f.id)}', '${escAttr(f.name)}')">
+          <div class="file-icon">📊</div>
+          <div class="file-info"><div class="file-name">${esc(f.name)}</div><div class="file-meta">${new Date(f.modifiedTime).toLocaleDateString()} &bull; Tap to open</div></div>
+        </div>
+      `).join('');
+    })
+    .catch(err => {
+      console.error('List error:', err);
+      document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Failed to list files: ' + esc(err.message) + '</p>';
+    });
 }
 
 function selectDriveFile(id, name) {
   currentFile = { id, name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   localStorage.setItem('sba_drive_file', JSON.stringify(currentFile));
+  localStorage.removeItem('sba_master_sheet_' + id);
   loadFileFromDrive(id);
   navigate('dashboard');
 }
@@ -897,10 +1660,10 @@ function selectDriveFile(id, name) {
 function showToast(msg, type) {
   const container = document.getElementById('toastContainer');
   const toast = document.createElement('div');
-  toast.className = 'toast ' + type;
-  toast.innerHTML = msg;
+  toast.className = 'toast ' + (type || '');
+  toast.textContent = msg;
   container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  setTimeout(() => toast.remove(), 3500);
 }
 
 // ==================== EVENT LISTENERS ====================
@@ -908,11 +1671,18 @@ document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.modal-overlay').forEach(m => {
     m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
   });
+  document.getElementById('reportFrom').value = new Date().toISOString().slice(0,10);
+  document.getElementById('reportTo').value = new Date().toISOString().slice(0,10);
 });
 
-// Load Google APIs (gapi library was already fetched via the <script> tag in <head>)
-gapi.load('client', onGapiLoad);
+// Global error safety net: never leave the user staring at a dead app with
+// no explanation.
+window.addEventListener('error', (e) => {
+  console.error('Uncaught error:', e.error || e.message);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('Unhandled promise rejection:', e.reason);
+});
 </script>
-<script src="https://accounts.google.com/gsi/client" onload="onGisLoad()"></script>
 </body>
 </html>
