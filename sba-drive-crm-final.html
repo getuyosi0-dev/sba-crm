@@ -1311,9 +1311,30 @@ function saveCompany() {
     if (dup) { showToast('A company with this name already exists', 'warning'); return; }
   }
 
-  data.push(newRow);
-  const uiRowIndex = data.length - 1;
+  // Preferred Excel row = first empty slot after continuous company block
+  // (stop at blank streak ≥3 or Legend/footer — never append after padding/legend)
+  let lastExistingExcelRow = headerRowIndex + 1;
+  let emptyStreak = 0;
+  for (let i = headerRowIndex + 1; i < data.length; i++) {
+    const nm = nameCol !== undefined ? data[i][nameCol] : data[i][0];
+    const text = nm === undefined || nm === null ? '' : String(nm).trim();
+    if (!text) {
+      emptyStreak++;
+      if (emptyStreak >= 3) break;
+      continue;
+    }
+    const low = text.toLowerCase();
+    if (low === 'legend' || low.indexOf('yellow-filled') !== -1 || low.indexOf('priority score') === 0) break;
+    emptyStreak = 0;
+    lastExistingExcelRow = i + 1;
+  }
+  const preferredExcelRowClamped = lastExistingExcelRow + 1;
+  // Place in AOA at the correct slot (Excel row N → data index N-1), not at the end
+  const uiRowIndex = preferredExcelRowClamped - 1;
+  while (data.length <= uiRowIndex) data.push(new Array(headers.length).fill(''));
+  data[uiRowIndex] = newRow;
   workbook.Sheets[targetName] = XLSX.utils.aoa_to_sheet(data);
+  console.log('[SBA] Preferred Excel row:', preferredExcelRowClamped, '(last real company on row', lastExistingExcelRow + ')');
 
   // Values for XML patch: actual header keys + canonical
   const addValues = {};
@@ -1333,25 +1354,6 @@ function saveCompany() {
     showToast('Could not map Company Name to a column in this Excel file.', 'error');
     return;
   }
-
-  // Preferred Excel row = first empty slot after the last *existing* company.
-  // Computed from the row we just appended: its AOA index is the Excel row number.
-  // (data[0] = Excel row 1 header, data[i] = Excel row i+1, so uiRowIndex+1 is the Excel row of the new company)
-  // For tables with trailing blank rows this lands at e.g. 81 after company on 80, not 477.
-  const preferredExcelRow = uiRowIndex + 1;
-  // Sanity: if somehow we appended far below real data, clamp by scanning prior companies
-  let lastExistingExcelRow = headerRowIndex + 1;
-  for (let i = headerRowIndex + 1; i < uiRowIndex; i++) {
-    const nm = nameCol !== undefined ? data[i][nameCol] : data[i][0];
-    if (nm !== undefined && nm !== null && String(nm).trim() !== '') {
-      const low = String(nm).toLowerCase();
-      if (low === 'legend' || low.indexOf('yellow-filled') !== -1 || low.indexOf('priority score') !== -1) continue;
-      lastExistingExcelRow = i + 1;
-    }
-  }
-  // New company should go on the next row after last existing (not after blank padding)
-  const preferredExcelRowClamped = lastExistingExcelRow + 1;
-  console.log('[SBA] Preferred Excel row:', preferredExcelRowClamped, '(last existing company row', lastExistingExcelRow + ', aoa append at', preferredExcelRow + ')');
 
   pendingEdits.push({
     type: 'add',
