@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <meta name="theme-color" content="#0f4c81">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SBA Drive CRM</title>
@@ -421,15 +422,23 @@ const FIELD_ALIASES = {
   brand_name: ['brand_name', 'brand', 'brandname', 'product_brand'],
   industry: ['industry', 'sector', 'industry_type', 'business_type'],
   location: ['location', 'city', 'address', 'region', 'site', 'place'],
-  opp_status: ['opp_status', 'opportunity_status', 'status', 'opportunity', 'opp', 'lead_status', 'hot_warm_cold'],
+  // Relationship Level is this workbook's "temperature"; also accept older opp_status columns
+  opp_status: ['opp_status', 'opportunity_status', 'status', 'opportunity', 'opp', 'lead_status', 'hot_warm_cold', 'relationship_level', 'relationship'],
+  relationship_level: ['relationship_level', 'relationship', 'rel_level'],
   sales_stage: ['sales_stage', 'stage', 'pipeline_stage', 'sales_stage_name', 'deal_stage'],
+  sales_potential: ['sales_potential', 'potential'],
   priority: ['priority', 'prio', 'importance'],
-  est_value: ['est_value', 'estimated_value', 'est_value_etb', 'value', 'deal_value', 'amount', 'opportunity_value', 'est_val'],
-  probability: ['probability', 'prob', 'win_probability', 'likelihood', 'prob_'],
+  est_value: ['est_value', 'estimated_value', 'est_value_etb', 'est_business_value_etb', 'est_business_value', 'business_value', 'value', 'deal_value', 'amount', 'opportunity_value', 'est_val'],
+  probability: ['probability', 'probability_', 'prob', 'win_probability', 'likelihood', 'prob_'],
   exp_revenue: ['exp_revenue', 'expected_revenue', 'exp_rev', 'expected_value', 'weighted_value', 'weighted_revenue'],
   contact_person: ['contact_person', 'contact', 'contact_name', 'person', 'primary_contact', 'contact_person_name'],
   phone: ['phone', 'mobile', 'tel', 'telephone', 'phone_number', 'mobile_number', 'cell', 'contact_phone'],
-  notes: ['notes', 'note', 'comments', 'comment', 'remarks', 'description'],
+  notes: ['notes', 'note', 'comments', 'comment', 'remarks', 'description', 'opportunity_summary', 'summary'],
+  opportunity_summary: ['opportunity_summary', 'summary', 'notes'],
+  current_supplier: ['current_supplier', 'supplier'],
+  next_action: ['next_action', 'action'],
+  next_follow_up_date: ['next_follow_up_date', 'next_followup_date', 'follow_up_date', 'next_follow_up'],
+  sales_owner: ['sales_owner', 'owner', 'rep'],
   application_type: ['application_type', 'app_type', 'application', 'tech_application'],
   number_of_technologies: ['number_of_technologies', 'num_technologies', 'technologies', 'tech_count', 'no_of_technologies'],
   number_of_brands: ['number_of_brands', 'num_brands', 'brands', 'brand_count', 'no_of_brands'],
@@ -437,7 +446,7 @@ const FIELD_ALIASES = {
 };
 
 // Always store these as Excel text (inlineStr), never as numbers — protects phone numbers, names, etc.
-const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'sales_stage', 'priority', 'contact_person', 'phone', 'notes', 'application_type']);
+const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'current_supplier', 'next_action', 'sales_owner', 'application_type']);
 
 const SS_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 
@@ -825,29 +834,112 @@ function navigate(screen) {
 }
 
 // ==================== EXCEL DATA HELPERS ====================
+function findTargetSheetName() {
+  if (!workbook) return null;
+  const sheetNames = workbook.SheetNames;
+  // Prefer exact / clear data sheet names first
+  const preferences = [
+    n => /sales\s*tracker/i.test(n),
+    n => /^master/i.test(n),
+    n => /master.*data|data.*master/i.test(n),
+    n => /tracker/i.test(n) && !/next\s*week/i.test(n),
+    n => /customer/i.test(n),
+    n => /\bdata\b/i.test(n) && !/validation|list/i.test(n)
+  ];
+  for (const pred of preferences) {
+    const hit = sheetNames.find(pred);
+    if (hit) return hit;
+  }
+  // Fallback: first non-dashboard / non-list sheet
+  const skip = sheetNames.find(n => !/dashboard|_lists|list|legend|plan/i.test(n));
+  return skip || sheetNames[0];
+}
+
+// Score a row as a likely header row by counting cells that match known field aliases.
+function scoreHeaderRow(row) {
+  if (!row || !row.length) return 0;
+  const allAliases = new Set();
+  Object.keys(FIELD_ALIASES).forEach(k => FIELD_ALIASES[k].forEach(a => allAliases.add(a)));
+  // also accept common literal header words
+  ['company', 'industry', 'contact', 'stage', 'priority', 'probability', 'value', 'supplier', 'owner', 'action', 'relationship'].forEach(w => allAliases.add(w));
+  let score = 0;
+  let nonEmpty = 0;
+  row.forEach(cell => {
+    const n = normalizeHeader(cell);
+    if (!n) return;
+    nonEmpty++;
+    if (allAliases.has(n)) score += 3;
+    else if (n.length > 2 && n.length < 40) score += 0.5; // generic non-empty label
+  });
+  // Prefer rows with several labeled columns
+  if (nonEmpty >= 5) score += 2;
+  if (nonEmpty >= 10) score += 2;
+  return score;
+}
+
+// Returns { headerRowIndex (0-based in AOA), headers[], data } for a sheet.
+// Detects title rows so we do not treat "SBA Ethiopia — Master Database..." as headers.
+function getSheetAoaInfo(sheet) {
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (!data.length) return { headerRowIndex: 0, headers: [], data };
+  let bestIdx = 0;
+  let bestScore = -1;
+  const scan = Math.min(data.length, 15);
+  for (let i = 0; i < scan; i++) {
+    const s = scoreHeaderRow(data[i]);
+    if (s > bestScore) { bestScore = s; bestIdx = i; }
+  }
+  // Require a minimum score so a title row is not chosen when nothing matches
+  if (bestScore < 3) bestIdx = 0;
+  const headers = (data[bestIdx] || []).map(h => String(h == null ? '' : h).trim());
+  return { headerRowIndex: bestIdx, headers, data, headerScore: bestScore };
+}
+
 function getCompaniesFromWorkbook() {
   if (!workbook) return [];
-  const sheetNames = workbook.SheetNames;
-  let targetSheet = null;
-  let targetName = '';
-  for (const name of sheetNames) {
-    const lower = name.toLowerCase();
-    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) {
-      targetSheet = workbook.Sheets[name]; targetName = name; break;
-    }
-  }
-  if (!targetSheet) { targetSheet = workbook.Sheets[sheetNames[0]]; targetName = sheetNames[0]; }
-  const data = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: '' });
-  if (data.length < 2) return [];
-  const headers = data[0].map(h => String(h).trim());
+  const targetName = findTargetSheetName();
+  if (!targetName) return [];
+  const targetSheet = workbook.Sheets[targetName];
+  const { headerRowIndex, headers, data } = getSheetAoaInfo(targetSheet);
+  if (data.length <= headerRowIndex + 1) return [];
   const companies = [];
-  for (let i = 1; i < data.length; i++) {
+  const nameCol = (() => {
+    const canon = buildCanonicalToHeaderKey(headers);
+    const key = canon.name;
+    if (!key) return 0;
+    return headers.findIndex(h => normalizeHeader(h) === key);
+  })();
+  for (let i = headerRowIndex + 1; i < data.length; i++) {
     const row = data[i];
-    if (!row[0] && !row[1]) continue;
-    const company = { _rowIndex: i, _sheetName: targetName };
-    headers.forEach((h, idx) => { company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : ''; });
+    if (!row) continue;
+    // Skip blank / legend rows
+    const nameVal = nameCol >= 0 ? row[nameCol] : row[0];
+    if (nameVal === undefined || nameVal === null || String(nameVal).trim() === '') continue;
+    // Skip known footer/legend markers
+    const low = String(nameVal).toLowerCase();
+    if (low === 'legend' || low.indexOf('yellow-filled') !== -1 || low.indexOf('priority score') !== -1) continue;
+
+    const company = { _rowIndex: i, _sheetName: targetName, _headerRowIndex: headerRowIndex };
+    headers.forEach((h, idx) => {
+      if (!h) return;
+      company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : '';
+    });
     company._headers = headers;
     enrichCompanyWithCanonicals(company, headers);
+    // Map relationship_level → opp_status for UI badges when no explicit opp_status
+    if (!company.opp_status && company.relationship_level) {
+      const rel = String(company.relationship_level).toLowerCase();
+      if (rel.indexOf('good') !== -1 || rel === 'warm') company.opp_status = 'Warm';
+      else if (rel === 'cold') company.opp_status = 'Cold';
+      else company.opp_status = company.relationship_level;
+    }
+    // Priority Critical → treat as Hot for filters
+    if (!company.opp_status && company.priority) {
+      const p = String(company.priority).toLowerCase();
+      if (p === 'critical') company.opp_status = 'Hot';
+      else if (p === 'high' || p === 'medium') company.opp_status = 'Warm';
+      else if (p === 'low') company.opp_status = 'Cold';
+    }
     companies.push(company);
   }
   return companies;
@@ -913,12 +1005,29 @@ function escapeHtml(str) {
 }
 
 // ==================== DASHBOARD ====================
+function companyTempBucket(c) {
+  // Prefer explicit opp_status; else Priority; else Relationship Level
+  const s = String(c.opp_status || '').toLowerCase();
+  if (s === 'hot' || s === 'critical') return 'hot';
+  if (s === 'warm' || s === 'high' || s === 'medium' || s.indexOf('good') !== -1) return 'warm';
+  if (s === 'cold' || s === 'low') return 'cold';
+  const p = String(c.priority || '').toLowerCase();
+  if (p === 'critical') return 'hot';
+  if (p === 'high' || p === 'medium') return 'warm';
+  if (p === 'low') return 'cold';
+  const r = String(c.relationship_level || '').toLowerCase();
+  if (r.indexOf('good') !== -1) return 'warm';
+  if (r === 'warm') return 'warm';
+  if (r === 'cold') return 'cold';
+  return 'warm';
+}
+
 function renderDashboard() {
   if (!workbook) return;
   const companies = getCompaniesFromWorkbook();
-  const hot = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'hot').length;
-  const warm = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'warm').length;
-  const cold = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'cold').length;
+  const hot = companies.filter(c => companyTempBucket(c) === 'hot').length;
+  const warm = companies.filter(c => companyTempBucket(c) === 'warm').length;
+  const cold = companies.filter(c => companyTempBucket(c) === 'cold').length;
   document.getElementById('kpiHot').textContent = hot;
   document.getElementById('kpiWarm').textContent = warm;
   document.getElementById('kpiCold').textContent = cold;
@@ -938,12 +1047,12 @@ function renderCompanies() {
   const search = document.getElementById('companySearch').value.toLowerCase();
   let list = companies;
   if (search) list = list.filter(c => String(c.name||'').toLowerCase().includes(search) || String(c.industry||'').toLowerCase().includes(search));
-  if (companyFilter !== 'all') list = list.filter(c => String(c.opp_status||'').toLowerCase() === companyFilter.toLowerCase());
+  if (companyFilter !== 'all') list = list.filter(c => companyTempBucket(c) === companyFilter.toLowerCase());
   document.getElementById('companyList').innerHTML = list.map(c => `
     <div class="company-card" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
       <div class="company-header">
         <div class="company-name">${escapeHtml(c.name || 'Unnamed')}</div>
-        <span class="badge badge-${escapeHtml(String(c.opp_status||'').toLowerCase())}">${escapeHtml(c.opp_status || '')}</span>
+        <span class="badge badge-${escapeHtml(companyTempBucket(c))}">${escapeHtml(c.priority || c.opp_status || companyTempBucket(c))}</span>
       </div>
       <div class="company-meta">
         <span class="badge badge-industry">${escapeHtml(c.industry || '')}</span>
@@ -974,18 +1083,22 @@ function formatNum(n) {
 function editCompany(rowIndex, sheetName) {
   if (!workbook) return;
   const sheet = workbook.Sheets[sheetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const { headers, data } = getSheetAoaInfo(sheet);
   if (data.length <= rowIndex) return;
-  const headers = data[0].map(h => String(h).trim());
   const row = data[rowIndex];
   editingCompanyIndex = rowIndex;
   editingSheetName = sheetName;
-  // Was this company added in the current session (still only a pending add)?
   editingIsPendingAdd = pendingEdits.some(e => e.type === 'add' && e.sheetName === sheetName && e._uiRowIndex === rowIndex);
 
   const company = {};
-  headers.forEach((h, i) => { company[normalizeHeader(h)] = row[i] !== undefined ? row[i] : ''; });
+  headers.forEach((h, i) => { if (h) company[normalizeHeader(h)] = row[i] !== undefined ? row[i] : ''; });
   enrichCompanyWithCanonicals(company, headers);
+  if (!company.opp_status && company.relationship_level) {
+    const rel = String(company.relationship_level).toLowerCase();
+    if (rel.indexOf('good') !== -1 || rel === 'warm') company.opp_status = 'Warm';
+    else if (rel === 'cold') company.opp_status = 'Cold';
+    else company.opp_status = company.relationship_level;
+  }
 
   document.getElementById('editCompanyName').textContent = company.name || 'Edit Company';
   document.getElementById('editCompanyIndustry').textContent = company.industry || 'No industry';
@@ -1024,14 +1137,14 @@ function editCompany(rowIndex, sheetName) {
 function saveCompanyEdit() {
   if (!workbook || editingCompanyIndex < 0 || !editingSheetName) return;
   const sheet = workbook.Sheets[editingSheetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  const headers = data[0].map(h => String(h).trim());
+  const { headers, data } = getSheetAoaInfo(sheet);
   const headerMap = {};
-  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
-  const canonMap = buildCanonicalToHeaderKey(headers); // canonical → actual normalized header key
+  headers.forEach((h, i) => { if (h) headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers);
 
   const row = data[editingCompanyIndex];
-  const fields = ['name','brand_name','industry','location','opp_status','sales_stage','priority','est_value','probability','contact_person','phone','notes'];
+  // Editable inputs only — never push formula-driven fields (priority, probability, next_action, rank)
+  const fields = ['name','brand_name','industry','location','opp_status','sales_stage','est_value','contact_person','phone','notes'];
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
     if (!el) return;
@@ -1040,44 +1153,42 @@ function saveCompanyEdit() {
       row[headerMap[actualKey]] = el.value;
     }
   });
-
-  // Auto-calculate exp_revenue into the real column if present
-  const estKey = canonMap['est_value'];
-  const probKey = canonMap['probability'];
-  const expKey = canonMap['exp_revenue'];
-  if (expKey && estKey && probKey && headerMap[expKey] !== undefined) {
-    const val = parseFloat(row[headerMap[estKey]]) || 0;
-    const prob = parseFloat(row[headerMap[probKey]]) || 0;
-    row[headerMap[expKey]] = val * prob / 100;
+  // Relationship level from status if that column exists
+  const statusEl = document.getElementById('edit_opp_status');
+  if (statusEl && canonMap.relationship_level && headerMap[canonMap.relationship_level] !== undefined) {
+    const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
+    row[headerMap[canonMap.relationship_level]] = relMap[statusEl.value] || statusEl.value;
+  }
+  // Opportunity summary from notes
+  const notesEl = document.getElementById('edit_notes');
+  if (notesEl && canonMap.opportunity_summary && headerMap[canonMap.opportunity_summary] !== undefined) {
+    row[headerMap[canonMap.opportunity_summary]] = notesEl.value;
   }
 
-  const newSheet = XLSX.utils.aoa_to_sheet(data);
-  workbook.Sheets[editingSheetName] = newSheet;
+  workbook.Sheets[editingSheetName] = XLSX.utils.aoa_to_sheet(data);
 
-  // Build values keyed by ACTUAL normalized header keys (what XML patching expects)
   const editValues = {};
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
     if (!el) return;
     const actualKey = canonMap[f] || f;
     editValues[actualKey] = el.value;
-    // also keep canonical for robustness inside apply*
     editValues[f] = el.value;
   });
-  if (expKey && headerMap[expKey] !== undefined) {
-    editValues[expKey] = row[headerMap[expKey]];
-    editValues['exp_revenue'] = row[headerMap[expKey]];
+  if (statusEl && canonMap.relationship_level) {
+    const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
+    editValues[canonMap.relationship_level] = relMap[statusEl.value] || statusEl.value;
+    editValues.relationship_level = editValues[canonMap.relationship_level];
+  }
+  if (notesEl && canonMap.opportunity_summary) {
+    editValues[canonMap.opportunity_summary] = notesEl.value;
+    editValues.opportunity_summary = notesEl.value;
   }
 
   if (editingIsPendingAdd) {
-    // Merge into the existing pending add so we don't try to edit a row that
-    // does not yet exist in the original XML.
     const addEdit = pendingEdits.find(e => e.type === 'add' && e.sheetName === editingSheetName && e._uiRowIndex === editingCompanyIndex);
-    if (addEdit) {
-      Object.assign(addEdit.values, editValues);
-    } else {
-      pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
-    }
+    if (addEdit) Object.assign(addEdit.values, editValues);
+    else pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
   } else {
     pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
   }
@@ -1102,90 +1213,85 @@ function saveCompany() {
   const industry = document.getElementById('acIndustry').value;
   if (!name || !industry) { showToast('Name and industry required', 'error'); return; }
 
-  // Find the main data sheet — same logic as getCompaniesFromWorkbook / edit
-  let targetName = '';
-  for (const n of workbook.SheetNames) {
-    const lower = n.toLowerCase();
-    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) { targetName = n; break; }
-  }
-  if (!targetName) targetName = workbook.SheetNames[0];
-
+  const targetName = findTargetSheetName() || workbook.SheetNames[0];
   const sheet = workbook.Sheets[targetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  const headers = data[0].map(h => String(h).trim());
+  const { headerRowIndex, headers, data } = getSheetAoaInfo(sheet);
   const headerMap = {};
-  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
-  const canonMap = buildCanonicalToHeaderKey(headers); // canonical → actual normalized key
+  headers.forEach((h, i) => { if (h) headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers);
   const keySet = new Set(Object.keys(headerMap));
+  console.log('[SBA] Target sheet:', targetName, 'headerRow:', headerRowIndex + 1, 'headers:', headers.filter(Boolean));
 
-  // setVal resolves canonical field names through aliases to the real column
+  const newRow = new Array(Math.max(headers.length, 1)).fill('');
   const setVal = (canonical, val) => {
     const actual = canonMap[canonical] || (headerMap[canonical] !== undefined ? canonical : null);
     if (actual != null && headerMap[actual] !== undefined) {
       newRow[headerMap[actual]] = val;
       return true;
     }
-    console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).join(', '));
+    // only warn for core fields
+    if (['name', 'industry', 'sales_stage', 'contact_person', 'est_value'].indexOf(canonical) !== -1) {
+      console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).join(', '));
+    }
     return false;
   };
 
-  const newRow = new Array(headers.length).fill('');
   const statusVal = document.getElementById('acStatus').value;
+  const stageVal = document.getElementById('acStage').value;
   setVal('name', name);
   setVal('brand_name', document.getElementById('acBrand').value.trim());
   setVal('industry', industry);
   setVal('location', document.getElementById('acLocation').value.trim());
-  setVal('opp_status', statusVal);
-  setVal('sales_stage', document.getElementById('acStage').value);
-  setVal('priority', statusVal === 'Hot' ? 'High' : statusVal === 'Warm' ? 'Medium' : 'Low');
+  setVal('sales_stage', stageVal);
+  // Relationship Level maps from Hot/Warm/Cold status
+  const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
+  setVal('relationship_level', relMap[statusVal] || statusVal);
+  setVal('opp_status', statusVal); // only if column exists
+  // Sales Potential from status
+  setVal('sales_potential', statusVal === 'Hot' ? 'High' : statusVal === 'Warm' ? 'Medium' : 'Low');
+  // Do NOT write priority / probability when they are formula columns — template formulas handle them
   const val = parseFloat(document.getElementById('acValue').value) || 0;
-  const prob = parseFloat(document.getElementById('acProb').value) || 0;
-  setVal('est_value', val);
-  setVal('probability', prob);
-  setVal('exp_revenue', val * prob / 100);
+  if (val) setVal('est_value', val);
   setVal('contact_person', document.getElementById('acContact').value.trim());
   setVal('phone', document.getElementById('acPhone').value.trim());
-  setVal('notes', document.getElementById('acNotes').value.trim());
-  setVal('application_type', 'Date Coding');
-  setVal('number_of_technologies', 0);
-  setVal('number_of_brands', 1);
-  setVal('number_of_machines', 0);
+  const notes = document.getElementById('acNotes').value.trim();
+  setVal('notes', notes);
+  setVal('opportunity_summary', notes);
+  setVal('sales_owner', 'Yosef Getu');
 
-  // Robust duplicate guard: normalize whitespace + case; check against real name column
-  const nameKey = canonMap['name'] || 'name';
+  // Optional fields only if columns exist — never invent columns
+  setVal('application_type', 'Date Coding');
+
+  // Robust duplicate guard
+  const nameKey = canonMap['name'] || 'company' || 'name';
   const nameCol = headerMap[nameKey];
   const normName = name.replace(/\s+/g, ' ').trim().toLowerCase();
   if (nameCol !== undefined) {
-    const dup = data.slice(1).some(r => String(r[nameCol] || '').replace(/\s+/g, ' ').trim().toLowerCase() === normName);
+    const dup = data.slice(headerRowIndex + 1).some(r => String(r[nameCol] || '').replace(/\s+/g, ' ').trim().toLowerCase() === normName);
     if (dup) { showToast('A company with this name already exists', 'warning'); return; }
   }
 
   data.push(newRow);
-  const uiRowIndex = data.length - 1; // SheetJS index of the new row (header is 0)
-  const newSheet = XLSX.utils.aoa_to_sheet(data);
-  workbook.Sheets[targetName] = newSheet;
+  const uiRowIndex = data.length - 1;
+  workbook.Sheets[targetName] = XLSX.utils.aoa_to_sheet(data);
 
-  // Build addValues keyed by ACTUAL normalized header keys so XML patching finds the columns.
-  // Also keep canonical keys for applyAddRow fallbacks.
+  // Values for XML patch: actual header keys + canonical
   const addValues = {};
   headers.forEach((h, i) => {
     const key = normalizeHeader(h);
+    if (!key) return;
     const cellVal = newRow[i];
-    // include 0 and other falsy-but-valid values; only skip truly empty strings
-    if (cellVal !== '' && cellVal !== undefined && cellVal !== null) {
-      addValues[key] = cellVal;
-    }
+    if (cellVal !== '' && cellVal !== undefined && cellVal !== null) addValues[key] = cellVal;
   });
-  // Ensure canonical keys are present too (for name detection / formula path)
   Object.keys(FIELD_ALIASES).forEach(canonical => {
     const actual = canonMap[canonical];
     if (actual && addValues[actual] !== undefined) addValues[canonical] = addValues[actual];
   });
 
-  if (!addValues.name && !addValues.company_name && !addValues.company) {
-    console.error('[SBA] Add company: could not map Company Name to any workbook header. Headers:', headers);
-    showToast('Could not map Company Name to a column in the Excel file. Check console for headers.', 'error');
-    // still keep UI change but warn
+  if (!addValues.name && !addValues.company && !addValues.company_name) {
+    console.error('[SBA] Add company: could not map Company Name. Headers:', headers);
+    showToast('Could not map Company Name to a column in this Excel file.', 'error');
+    return;
   }
 
   pendingEdits.push({ type: 'add', sheetName: targetName, values: addValues, _uiRowIndex: uiRowIndex });
@@ -1193,13 +1299,9 @@ function saveCompany() {
   updateDirtyIndicator();
 
   closeModal('modalAddCompany');
-  document.getElementById('acName').value = '';
-  document.getElementById('acBrand').value = '';
-  document.getElementById('acLocation').value = '';
-  document.getElementById('acValue').value = '';
-  document.getElementById('acNotes').value = '';
-  document.getElementById('acContact').value = '';
-  document.getElementById('acPhone').value = '';
+  ['acName','acBrand','acLocation','acValue','acNotes','acContact','acPhone'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
 
   showToast('Company added — unsaved. Tap "Save to Drive" to persist.', 'success');
   renderCompanies();
@@ -1362,11 +1464,24 @@ function insertCellInOrder(rowEl, cellEl, col) {
 }
 
 function shiftFormulaRow(formula, fromRow, toRow) {
-  return formula.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (m, colAbs, col, rowAbs, rowNum) => {
+  // 1) Shift relative same-row references: N100 → N101 when fromRow=100, toRow=101
+  // 2) Expand absolute ranges that end at fromRow: $N$2:$N$100 → $N$2:$N$101
+  //    (needed for RANK/COUNTIF over the full data column)
+  let out = String(formula);
+  // Expand closed absolute ranges ending at fromRow
+  out = out.replace(/(\$?[A-Z]{1,3}\$?)(\d+)(:(\$?[A-Z]{1,3})\$?)(\d+)/gi, (m, start, r1, mid, endCol, r2) => {
+    if (parseInt(r2, 10) === fromRow) {
+      return start + r1 + mid + toRow;
+    }
+    return m;
+  });
+  // Shift single relative refs on fromRow (skip already-absolute rows)
+  out = out.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (m, colAbs, col, rowAbs, rowNum) => {
     if (rowAbs === '$') return m;
     if (parseInt(rowNum, 10) !== fromRow) return m;
     return colAbs + col + rowAbs + toRow;
   });
+  return out;
 }
 
 function serializeXmlDoc(doc, originalXmlStr) {
@@ -1664,8 +1779,25 @@ async function generateSafeWorkbookBuffer() {
       tableInfoCache[sheetPath] = tableInfo;
     }
 
-    const headerRow = findRowEl(sheetDataEl, 1);
-    if (!headerRow) throw new Error('the "' + sheetName + '" sheet has no header row (row 1) — aborting');
+    // Prefer table header row; else score first rows in XML like we do for SheetJS
+    let headerExcelRow = 1;
+    if (tableInfo && tableInfo.ref) {
+      const startRef = tableInfo.ref.split(':')[0];
+      const start = colIndexFromRef(startRef);
+      if (start) headerExcelRow = start.row;
+    } else {
+      // Score rows 1..15 in the sheet XML
+      let bestScore = -1;
+      for (let r = 1; r <= 15; r++) {
+        const re = findRowEl(sheetDataEl, r);
+        if (!re) continue;
+        const texts = Array.from(re.getElementsByTagName('c')).map(c => cellText(c, sharedStrings));
+        const s = scoreHeaderRow(texts);
+        if (s > bestScore) { bestScore = s; headerExcelRow = r; }
+      }
+    }
+    const headerRow = findRowEl(sheetDataEl, headerExcelRow);
+    if (!headerRow) throw new Error('the "' + sheetName + '" sheet has no header row (row ' + headerExcelRow + ') — aborting');
     const headerColMap = {};
     Array.from(headerRow.getElementsByTagName('c')).forEach(c => {
       const ref = colIndexFromRef(c.getAttribute('r'));
@@ -1673,7 +1805,10 @@ async function generateSafeWorkbookBuffer() {
       const text = cellText(c, sharedStrings);
       if (text) headerColMap[normalizeHeader(text)] = ref.col;
     });
-    console.log('[SBA] Sheet "' + sheetName + '" headers:', Object.keys(headerColMap));
+    console.log('[SBA] Sheet "' + sheetName + '" header Excel row', headerExcelRow, 'cols:', Object.keys(headerColMap));
+    if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
+      console.warn('[SBA] No Company/Name column found in header map — add may fail validation');
+    }
 
     // Process adds first (extend table sequentially), then edits of existing rows
     const adds = bySheet[sheetName].filter(e => e.type === 'add');
