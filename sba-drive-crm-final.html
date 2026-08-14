@@ -1536,6 +1536,25 @@ function serializeXmlDoc(doc, originalXmlStr) {
 function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
   let totalsRowEl = null, templateRowNum, newRowNum;
 
+  // Name column used to find last occupied data row (tables often have hundreds of blank rows)
+  const nameColForScan = headerColMap['company'] !== undefined ? headerColMap['company']
+    : (headerColMap['name'] !== undefined ? headerColMap['name']
+    : (headerColMap['company_name'] !== undefined ? headerColMap['company_name'] : 0));
+
+  function rowHasName(rowNum) {
+    const re = findRowEl(sheetDataEl, rowNum);
+    if (!re) return false;
+    const cell = Array.from(re.getElementsByTagName('c')).find(c => {
+      const r = colIndexFromRef(c.getAttribute('r'));
+      return r && r.col === nameColForScan;
+    });
+    if (!cell) return false;
+    // shared string / inline / value
+    if (cell.getElementsByTagName('v').length || cell.getElementsByTagName('is').length) return true;
+    // formula-only empty display still counts as "occupied" structure — treat as empty for insertion
+    return false;
+  }
+
   if (tableInfo && tableInfo.ref) {
     const parts = tableInfo.ref.split(':');
     const startRef = parts[0];
@@ -1543,23 +1562,37 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
     const start = colIndexFromRef(startRef), end = colIndexFromRef(endRef);
     if (!start || !end) throw new Error('Invalid table ref: ' + tableInfo.ref);
     const totalsRowCount = tableInfo.totalsRowCount || 0;
-    const lastDataRow = end.row - totalsRowCount;
-    templateRowNum = lastDataRow;
-    newRowNum = lastDataRow + 1;
-    if (totalsRowCount > 0) totalsRowEl = findRowEl(sheetDataEl, end.row);
-    const newEnd = colLetters(end.col) + (end.row + 1);
-    const newTableRef = startRef + ':' + newEnd;
-    const oldRef = tableInfo.ref;
-    tableInfo.el.setAttribute('ref', newTableRef);
-    // Always keep autoFilter in sync with the table ref when it was matching
-    const autoFilterEl = tableInfo.el.getElementsByTagName('autoFilter')[0];
-    if (autoFilterEl) {
-      const afRef = autoFilterEl.getAttribute('ref');
-      if (!afRef || afRef === oldRef || afRef === tableInfo.ref) {
-        autoFilterEl.setAttribute('ref', newTableRef);
-      }
+    const tableLastRow = end.row - totalsRowCount;
+    const headerRowNum = start.row;
+
+    // Find last occupied company row inside the table (skip trailing blank reserved rows)
+    let lastOccupied = headerRowNum;
+    for (let r = tableLastRow; r > headerRowNum; r--) {
+      if (rowHasName(r)) { lastOccupied = r; break; }
     }
-    tableInfo.ref = newTableRef;
+    templateRowNum = lastOccupied > headerRowNum ? lastOccupied : Math.min(headerRowNum + 1, tableLastRow);
+    newRowNum = lastOccupied > headerRowNum ? (lastOccupied + 1) : (headerRowNum + 1);
+
+    // If the next row is still inside the current table range, fill that blank row
+    // and do NOT extend the table. Only extend when we're past the table end.
+    let extendTable = newRowNum > tableLastRow;
+    if (totalsRowCount > 0) totalsRowEl = findRowEl(sheetDataEl, end.row);
+
+    if (extendTable) {
+      const newEnd = colLetters(end.col) + (end.row + 1);
+      const newTableRef = startRef + ':' + newEnd;
+      const oldRef = tableInfo.ref;
+      tableInfo.el.setAttribute('ref', newTableRef);
+      const autoFilterEl = tableInfo.el.getElementsByTagName('autoFilter')[0];
+      if (autoFilterEl) {
+        const afRef = autoFilterEl.getAttribute('ref');
+        if (!afRef || afRef === oldRef) autoFilterEl.setAttribute('ref', newTableRef);
+      }
+      tableInfo.ref = newTableRef;
+      console.log('[SBA] Table extended to', newTableRef, 'new company at row', newRowNum);
+    } else {
+      console.log('[SBA] Filling blank table row', newRowNum, '(table stays', tableInfo.ref + ', last occupied', lastOccupied + ')');
+    }
   } else {
     // No table: find the last non-empty data row (prefer rows that look like company data)
     // rather than blindly using the max row attribute (which might be a far-below blank).
@@ -1587,6 +1620,12 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
   }
 
   const templateRowEl = findRowEl(sheetDataEl, templateRowNum);
+  // If a blank/sparse row already exists at newRowNum, remove it so we can write a full row
+  const existingAtNew = findRowEl(sheetDataEl, newRowNum);
+  if (existingAtNew && existingAtNew !== templateRowEl) {
+    existingAtNew.parentNode.removeChild(existingAtNew);
+  }
+
   const newRowEl = ssEl(doc, 'row');
   newRowEl.setAttribute('r', String(newRowNum));
   if (templateRowEl) {
@@ -1801,6 +1840,14 @@ async function generateSafeWorkbookBuffer() {
   const tableInfoCache = {};
   const touchedTablePaths = new Set();
   const expectedTableRefs = {};
+  // Names we EXPECT from pending add edits (source of truth for validation)
+  const expectedAddNames = [];
+  pendingEdits.forEach(e => {
+    if (e.type !== 'add' || !e.values) return;
+    const n = e.values.name || e.values.company || e.values.company_name || e.values.customer || e.values.account;
+    if (n) expectedAddNames.push(String(n));
+  });
+  console.log('[SBA] Pending edits:', pendingEdits.length, 'expected add names:', expectedAddNames);
 
   for (const sheetName of Object.keys(bySheet)) {
     const sheetPath = sheetNameToPath[sheetName];
@@ -1855,9 +1902,15 @@ async function generateSafeWorkbookBuffer() {
     const edits = bySheet[sheetName].filter(e => e.type === 'edit');
 
     for (const edit of adds) {
+      console.log('[SBA] Applying ADD to "' + sheetName + '" values:', edit.values);
       const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo);
       if (newName) addedCompanyNames.push(String(newName));
-      else console.warn('[SBA] Add produced no company name. Value keys:', Object.keys(edit.values));
+      else {
+        // Fallback: use expected name from values so validation still runs
+        const fallback = edit.values.name || edit.values.company || edit.values.company_name;
+        console.warn('[SBA] Add produced no company name from applyAddRow. Value keys:', Object.keys(edit.values), 'fallback:', fallback);
+        if (fallback) addedCompanyNames.push(String(fallback));
+      }
       if (tableInfo) touchedTablePaths.add(sheetPath);
     }
     for (const edit of edits) {
@@ -1890,10 +1943,13 @@ async function generateSafeWorkbookBuffer() {
   }
 
   const outBuf = await zip.generateAsync({ type: 'arraybuffer' });
+  // Prefer expectedAddNames (from pendingEdits) — if applyAddRow failed silently we still check
+  const namesToVerify = expectedAddNames.length ? expectedAddNames : addedCompanyNames;
   await validateGeneratedWorkbook(outBuf, {
-    addedCompanyNames,
+    addedCompanyNames: namesToVerify,
     originalSheetNames: allSheetNames,
-    expectedTableRefs
+    expectedTableRefs,
+    mustHaveAdds: expectedAddNames.length > 0
   });
   return outBuf;
 }
@@ -1917,22 +1973,54 @@ async function validateGeneratedWorkbook(buf, expectations) {
     throw new Error('the Dashboard sheet is missing from the generated file');
   }
 
+  if (expectations.mustHaveAdds && (!expectations.addedCompanyNames || !expectations.addedCompanyNames.length)) {
+    throw new Error('Add Company was requested but no company name was available to write — aborting save so Drive is not overwritten with an incomplete file');
+  }
+
   for (const name of expectations.addedCompanyNames) {
-    let found = false;
-    // Search both escaped and raw forms (textContent vs attribute serialization)
+    let foundInXml = false;
     const escaped = xmlEscape(name);
     for (const sheetName of Object.keys(sheetNameToPath)) {
       const xml = await zip.file(sheetNameToPath[sheetName]).async('string');
-      if (xml.indexOf(escaped) !== -1 || xml.indexOf(name) !== -1) { found = true; break; }
+      if (xml.indexOf(escaped) !== -1 || xml.indexOf(name) !== -1) { foundInXml = true; break; }
     }
-    if (!found) throw new Error('could not verify that "' + name + '" was actually written into the generated file');
+    if (!foundInXml) {
+      throw new Error('could not verify that "' + name + '" was written into the sheet XML — aborting save');
+    }
+  }
+
+  // Second check: re-open with SheetJS and confirm the company appears in cell data
+  if (expectations.addedCompanyNames && expectations.addedCompanyNames.length) {
+    try {
+      const reWb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      for (const name of expectations.addedCompanyNames) {
+        let foundInSheetJS = false;
+        for (const sn of reWb.SheetNames) {
+          const rows = XLSX.utils.sheet_to_json(reWb.Sheets[sn], { header: 1, defval: '' });
+          for (const row of rows) {
+            if (row.some(cell => String(cell).indexOf(name) !== -1 || String(cell) === name)) {
+              foundInSheetJS = true;
+              break;
+            }
+          }
+          if (foundInSheetJS) break;
+        }
+        if (!foundInSheetJS) {
+          throw new Error('SheetJS could not find "' + name + '" after generation — the row was not written correctly. Drive file left unchanged.');
+        }
+      }
+      console.log('[SBA] SheetJS verified all added company names present');
+    } catch (e) {
+      if (e.message && e.message.indexOf('SheetJS could not find') !== -1) throw e;
+      console.warn('[SBA] SheetJS re-read warning:', e);
+      // still require XML match which already passed
+    }
   }
 
   // Verify table refs expanded if we expected them to
   if (expectations.expectedTableRefs) {
     for (const sheetPath of Object.keys(expectations.expectedTableRefs)) {
       const expectedRef = expectations.expectedTableRefs[sheetPath];
-      // Find table part for this sheet
       const parts = sheetPath.split('/');
       const fileName = parts.pop();
       const relsPath = parts.join('/') + '/_rels/' + fileName + '.rels';
@@ -1946,7 +2034,9 @@ async function validateGeneratedWorkbook(buf, expectations) {
       if (!tableFile) continue;
       const tableXml = await tableFile.async('string');
       if (tableXml.indexOf('ref="' + expectedRef + '"') === -1 && tableXml.indexOf("ref='" + expectedRef + "'") === -1) {
-        console.warn('[SBA] Table ref may not match expected "' + expectedRef + '". Table XML snippet will be checked by Excel.');
+        console.warn('[SBA] Table ref may not match expected "' + expectedRef + '".');
+      } else {
+        console.log('[SBA] Table ref confirmed:', expectedRef);
       }
     }
   }
