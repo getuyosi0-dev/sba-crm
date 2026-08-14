@@ -1467,20 +1467,54 @@ async function loadZipParts(zip) {
   return { sheetNameToPath, allSheetNames };
 }
 
+// Namespace-safe child lookup (OOXML uses a default xmlns; getElementsByTagName
+// is unreliable across browsers for namespaced documents).
+function ssChildren(parent, localName) {
+  if (!parent) return [];
+  const out = [];
+  const all = parent.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    if (all[i].localName === localName || all[i].tagName === localName ||
+        all[i].tagName === 'x:' + localName) out.push(all[i]);
+  }
+  // Prefer direct path when default NS makes getElementsByTagName work
+  if (!out.length) {
+    try {
+      const byTag = parent.getElementsByTagName(localName);
+      for (let i = 0; i < byTag.length; i++) out.push(byTag[i]);
+    } catch (e) {}
+  }
+  return out;
+}
+
+function ssFirst(parent, localName) {
+  const list = ssChildren(parent, localName);
+  return list.length ? list[0] : null;
+}
+
 async function loadSharedStrings(zip) {
   const file = zip.file('xl/sharedStrings.xml');
   if (!file) return [];
   const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml');
-  return Array.from(doc.getElementsByTagName('si')).map(si => Array.from(si.getElementsByTagName('t')).map(t => t.textContent).join(''));
+  const sis = ssChildren(doc, 'si');
+  return sis.map(si => ssChildren(si, 't').map(t => t.textContent || '').join(''));
 }
 
 function cellText(cellEl, sharedStrings) {
   if (!cellEl) return '';
   const t = cellEl.getAttribute('t');
-  if (t === 's') { const v = cellEl.getElementsByTagName('v')[0]; const idx = v ? parseInt(v.textContent, 10) : -1; return sharedStrings[idx] || ''; }
-  if (t === 'inlineStr') { const isEl = cellEl.getElementsByTagName('is')[0]; return isEl ? Array.from(isEl.getElementsByTagName('t')).map(t2 => t2.textContent).join('') : ''; }
-  const v = cellEl.getElementsByTagName('v')[0];
-  return v ? v.textContent : (cellEl.textContent || '');
+  if (t === 's') {
+    const v = ssFirst(cellEl, 'v');
+    const idx = v ? parseInt(v.textContent, 10) : -1;
+    return (idx >= 0 && sharedStrings[idx] != null) ? String(sharedStrings[idx]) : '';
+  }
+  if (t === 'inlineStr') {
+    const isEl = ssFirst(cellEl, 'is');
+    return isEl ? ssChildren(isEl, 't').map(t2 => t2.textContent || '').join('') : '';
+  }
+  const v = ssFirst(cellEl, 'v');
+  if (v) return v.textContent || '';
+  return cellEl.textContent || '';
 }
 
 function resolveRelativePath(basePath, relTarget) {
@@ -1515,18 +1549,18 @@ async function getTableInfoForSheet(zip, sheetPath, sheetDoc) {
 
 function getMaxRowNum(sheetDataEl) {
   let max = 0;
-  Array.from(sheetDataEl.getElementsByTagName('row')).forEach(r => { const n = parseInt(r.getAttribute('r'), 10); if (n > max) max = n; });
+  ssChildren(sheetDataEl, 'row').forEach(r => { const n = parseInt(r.getAttribute('r'), 10); if (n > max) max = n; });
   return max;
 }
 function findRowEl(sheetDataEl, rowNum) {
-  return Array.from(sheetDataEl.getElementsByTagName('row')).find(r => parseInt(r.getAttribute('r'), 10) === rowNum) || null;
+  return ssChildren(sheetDataEl, 'row').find(r => parseInt(r.getAttribute('r'), 10) === rowNum) || null;
 }
 function insertRowInOrder(sheetDataEl, rowEl, rowNum) {
-  const next = Array.from(sheetDataEl.getElementsByTagName('row')).find(r => parseInt(r.getAttribute('r'), 10) > rowNum);
+  const next = ssChildren(sheetDataEl, 'row').find(r => parseInt(r.getAttribute('r'), 10) > rowNum);
   if (next) sheetDataEl.insertBefore(rowEl, next); else sheetDataEl.appendChild(rowEl);
 }
 function insertCellInOrder(rowEl, cellEl, col) {
-  const next = Array.from(rowEl.getElementsByTagName('c')).find(c => { const r = colIndexFromRef(c.getAttribute('r')); return r && r.col > col; });
+  const next = ssChildren(rowEl, 'c').find(c => { const r = colIndexFromRef(c.getAttribute('r')); return r && r.col > col; });
   if (next) rowEl.insertBefore(cellEl, next); else rowEl.appendChild(cellEl);
 }
 
@@ -1570,12 +1604,11 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
 
   function cellHasRealValue(cell) {
     if (!cell) return false;
-    // Must have a <v> or <is> child with non-empty text (self-closing <c .../> is empty)
-    const v = cell.getElementsByTagName('v')[0];
+    const v = ssFirst(cell, 'v');
     if (v && String(v.textContent || '').trim() !== '') return true;
-    const isEl = cell.getElementsByTagName('is')[0];
+    const isEl = ssFirst(cell, 'is');
     if (isEl) {
-      const texts = Array.from(isEl.getElementsByTagName('t')).map(t => t.textContent || '').join('');
+      const texts = ssChildren(isEl, 't').map(t => t.textContent || '').join('');
       if (String(texts).trim() !== '') return true;
     }
     return false;
@@ -1584,7 +1617,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
   function rowHasName(rowNum) {
     const re = findRowEl(sheetDataEl, rowNum);
     if (!re) return false;
-    const cell = Array.from(re.getElementsByTagName('c')).find(c => {
+    const cell = ssChildren(re, 'c').find(c => {
       const r = colIndexFromRef(c.getAttribute('r'));
       return r && r.col === nameColForScan;
     });
@@ -1691,12 +1724,12 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     const col = headerColMap[key];
     const colRef = colLetters(col) + newRowNum;
     const templateCellEl = templateRowEl
-      ? Array.from(templateRowEl.getElementsByTagName('c')).find(c => {
+      ? ssChildren(templateRowEl, 'c').find(c => {
           const r = colIndexFromRef(c.getAttribute('r'));
           return r && r.col === col;
         })
       : null;
-    const formulaEl = templateCellEl ? templateCellEl.getElementsByTagName('f')[0] : null;
+    const formulaEl = templateCellEl ? ssFirst(templateCellEl, 'f') : null;
     // Accept value under this key OR under any alias that maps here
     let val = values[key];
     if (val === undefined || val === null || val === '') {
@@ -1836,9 +1869,9 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
     writtenCols.add(col);
 
     const colRef = colLetters(col) + rowNum;
-    let cellEl = Array.from(rowEl.getElementsByTagName('c')).find(c => c.getAttribute('r') === colRef);
+    let cellEl = ssChildren(rowEl, 'c').find(c => c.getAttribute('r') === colRef);
 
-    if (cellEl && cellEl.getElementsByTagName('f').length) return; // formula cell — leave untouched
+    if (cellEl && ssFirst(cellEl, 'f')) return; // formula cell — leave untouched
 
     const val = values[key];
     if (val === '' || val === undefined || val === null) {
@@ -1905,7 +1938,7 @@ async function generateSafeWorkbookBuffer() {
     const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
     if (doc.getElementsByTagName('parsererror').length) throw new Error('the "' + sheetName + '" sheet XML could not be parsed — aborting to avoid a broken save');
 
-    const sheetDataEl = doc.getElementsByTagName('sheetData')[0];
+    const sheetDataEl = ssFirst(doc, 'sheetData') || doc.getElementsByTagName('sheetData')[0];
     if (!sheetDataEl) throw new Error('the "' + sheetName + '" sheet has no data section — aborting');
 
     let tableInfo = tableInfoCache[sheetPath];
@@ -1934,15 +1967,29 @@ async function generateSafeWorkbookBuffer() {
     const headerRow = findRowEl(sheetDataEl, headerExcelRow);
     if (!headerRow) throw new Error('the "' + sheetName + '" sheet has no header row (row ' + headerExcelRow + ') — aborting');
     const headerColMap = {};
-    Array.from(headerRow.getElementsByTagName('c')).forEach(c => {
+    ssChildren(headerRow, 'c').forEach(c => {
       const ref = colIndexFromRef(c.getAttribute('r'));
       if (!ref) return;
       const text = cellText(c, sharedStrings);
       if (text) headerColMap[normalizeHeader(text)] = ref.col;
     });
+    // Fallback: if XML shared-string resolution failed, use SheetJS header map
+    if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
+      console.warn('[SBA] XML header map missing Company — falling back to SheetJS headers');
+      try {
+        const sheet = workbook && workbook.Sheets[sheetName];
+        if (sheet) {
+          const info = getSheetAoaInfo(sheet);
+          (info.headers || []).forEach((h, i) => {
+            const key = normalizeHeader(h);
+            if (key && headerColMap[key] === undefined) headerColMap[key] = i;
+          });
+        }
+      } catch (e) { console.warn('[SBA] SheetJS header fallback failed', e); }
+    }
     console.log('[SBA] Sheet "' + sheetName + '" header Excel row', headerExcelRow, 'cols:', Object.keys(headerColMap));
     if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
-      console.warn('[SBA] No Company/Name column found in header map — add may fail validation');
+      throw new Error('No Company/Name column found in "' + sheetName + '" — cannot add company. Headers: ' + Object.keys(headerColMap).join(', '));
     }
 
     // Process adds first (extend table sequentially), then edits of existing rows
