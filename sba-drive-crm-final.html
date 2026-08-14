@@ -595,9 +595,18 @@ async function interpretDriveError(res, context) {
   try { bodyText = await res.text(); } catch (e) { bodyText = '(could not read response body: ' + e.message + ')'; }
   console.error('Drive ' + context + ' failed:', res.status, bodyText);
   let reason;
+  const lower = bodyText.toLowerCase();
   switch (res.status) {
-    case 401: reason = 'Authentication expired — please reconnect to Google.'; break;
-    case 403: reason = 'Permission denied for this file (check sharing/scope).'; break;
+    case 401:
+      reason = 'Authentication expired — please reconnect to Google.';
+      break;
+    case 403:
+      if (lower.indexOf('appnotauthorizedtofile') !== -1 || lower.indexOf('not granted the app') !== -1) {
+        reason = 'This app is not authorized to write that file. Use "Select Excel File from Drive" (Google Picker) to open it again, then Save. (drive.file scope only allows files you open via the picker.)';
+      } else {
+        reason = 'Permission denied for this file (check sharing/scope).';
+      }
+      break;
     case 404: reason = 'File not found on Drive (it may have been moved, deleted, or the file ID is invalid).'; break;
     case 400: reason = 'Invalid upload request (' + summarizeDriveErrorBody(bodyText) + ').'; break;
     case 0:   reason = 'Network error — check your connection.'; break;
@@ -837,22 +846,31 @@ function navigate(screen) {
 function findTargetSheetName() {
   if (!workbook) return null;
   const sheetNames = workbook.SheetNames;
-  // Prefer exact / clear data sheet names first
+  // Strip leading emoji / symbols so "📋 Master Data" still matches Master
+  const clean = n => String(n).replace(/^[^\w]+/u, '').trim();
   const preferences = [
     n => /sales\s*tracker/i.test(n),
-    n => /^master/i.test(n),
-    n => /master.*data|data.*master/i.test(n),
+    n => /master/i.test(clean(n)) && /data/i.test(n),
+    n => /master/i.test(clean(n)),
     n => /tracker/i.test(n) && !/next\s*week/i.test(n),
     n => /customer/i.test(n),
-    n => /\bdata\b/i.test(n) && !/validation|list/i.test(n)
+    n => /\bdata\b/i.test(n) && !/validation|list|dashboard/i.test(n)
   ];
   for (const pred of preferences) {
     const hit = sheetNames.find(pred);
     if (hit) return hit;
   }
-  // Fallback: first non-dashboard / non-list sheet
-  const skip = sheetNames.find(n => !/dashboard|_lists|list|legend|plan/i.test(n));
-  return skip || sheetNames[0];
+  // Prefer the sheet with the strongest header-like first rows
+  let bestName = null, bestScore = -1;
+  for (const n of sheetNames) {
+    if (/dashboard|_lists|list|legend|plan/i.test(n)) continue;
+    const info = getSheetAoaInfo(workbook.Sheets[n]);
+    if ((info.headerScore || 0) > bestScore) {
+      bestScore = info.headerScore || 0;
+      bestName = n;
+    }
+  }
+  return bestName || sheetNames.find(n => !/dashboard|_lists|list|legend|plan/i.test(n)) || sheetNames[0];
 }
 
 // Score a row as a likely header row by counting cells that match known field aliases.
@@ -860,20 +878,32 @@ function scoreHeaderRow(row) {
   if (!row || !row.length) return 0;
   const allAliases = new Set();
   Object.keys(FIELD_ALIASES).forEach(k => FIELD_ALIASES[k].forEach(a => allAliases.add(a)));
-  // also accept common literal header words
-  ['company', 'industry', 'contact', 'stage', 'priority', 'probability', 'value', 'supplier', 'owner', 'action', 'relationship'].forEach(w => allAliases.add(w));
+  // Common header words (partial match allowed below)
+  const headerWords = ['company', 'industry', 'contact', 'stage', 'priority', 'probability', 'value', 'supplier', 'owner', 'action', 'relationship', 'brand', 'phone', 'location', 'status', 'notes', 'name', 'customer', 'account', 'machine', 'application', 'revenue', 'potential', 'follow'];
+  headerWords.forEach(w => allAliases.add(w));
   let score = 0;
   let nonEmpty = 0;
+  let longTitlePenalty = 0;
   row.forEach(cell => {
-    const n = normalizeHeader(cell);
-    if (!n) return;
+    const raw = String(cell == null ? '' : cell).trim();
+    if (!raw) return;
     nonEmpty++;
-    if (allAliases.has(n)) score += 3;
-    else if (n.length > 2 && n.length < 40) score += 0.5; // generic non-empty label
+    const n = normalizeHeader(raw);
+    // Long title cells (e.g. "Master Database Coding Marking CRM...") are NOT headers
+    if (raw.length > 50 || n.length > 45) {
+      longTitlePenalty += 5;
+      return;
+    }
+    if (allAliases.has(n)) score += 4;
+    else if (headerWords.some(w => n.indexOf(w) !== -1)) score += 3;
+    else if (n.length > 2 && n.length < 35) score += 0.8;
   });
-  // Prefer rows with several labeled columns
-  if (nonEmpty >= 5) score += 2;
-  if (nonEmpty >= 10) score += 2;
+  if (nonEmpty >= 5) score += 3;
+  if (nonEmpty >= 10) score += 3;
+  if (nonEmpty >= 15) score += 2;
+  // Title rows often have 1–2 non-empty cells only
+  if (nonEmpty <= 2 && longTitlePenalty > 0) score = 0;
+  score -= longTitlePenalty;
   return score;
 }
 
@@ -881,16 +911,26 @@ function scoreHeaderRow(row) {
 // Detects title rows so we do not treat "SBA Ethiopia — Master Database..." as headers.
 function getSheetAoaInfo(sheet) {
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (!data.length) return { headerRowIndex: 0, headers: [], data };
+  if (!data.length) return { headerRowIndex: 0, headers: [], data, headerScore: 0 };
   let bestIdx = 0;
   let bestScore = -1;
-  const scan = Math.min(data.length, 15);
+  const scan = Math.min(data.length, 25);
   for (let i = 0; i < scan; i++) {
     const s = scoreHeaderRow(data[i]);
     if (s > bestScore) { bestScore = s; bestIdx = i; }
   }
-  // Require a minimum score so a title row is not chosen when nothing matches
-  if (bestScore < 3) bestIdx = 0;
+  // NEVER force row 0 when a better-scoring row exists. Title rows score near 0.
+  // If everything is weak, still keep bestIdx (often row 1 or 2 for titled sheets).
+  if (bestScore < 1) {
+    // Fallback: first row with ≥5 non-empty short cells
+    for (let i = 0; i < scan; i++) {
+      const nonEmpty = (data[i] || []).filter(c => {
+        const s = String(c == null ? '' : c).trim();
+        return s && s.length < 50;
+      }).length;
+      if (nonEmpty >= 5) { bestIdx = i; bestScore = nonEmpty; break; }
+    }
+  }
   const headers = (data[bestIdx] || []).map(h => String(h == null ? '' : h).trim());
   return { headerRowIndex: bestIdx, headers, data, headerScore: bestScore };
 }
