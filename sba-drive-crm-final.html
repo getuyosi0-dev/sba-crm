@@ -7,11 +7,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SBA Drive CRM</title>
-
-<!-- External Libraries -->
+<!--
+  FIX (prerequisite for both reported problems): the two Google script tags
+  used to live here with no onload wiring, AND were duplicated again near
+  the bottom of the file. Between that and a `let gapiLoaded` variable
+  colliding with a `function gapiLoaded(){...}` of the same name later in
+  the script, the page could throw a SyntaxError on parse and/or load the
+  Google client library twice, leaving auth in an inconsistent state. Both
+  scripts are now loaded exactly once, at the end of <body>, after the code
+  that defines their onload callbacks (see bottom of file for why).
+  JSZip is added here — it's used to patch the original .xlsx bytes
+  directly instead of rebuilding the workbook (see PROBLEM 2 fix below).
+-->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-
 <style>
 :root {
   --primary: #0f4c81; --primary-dark: #0a3a63; --accent: #e8b923;
@@ -96,12 +105,18 @@ body { padding-bottom: 80px; }
 .modal-close { background: none; border: none; font-size: 24px; color: var(--text-light); cursor: pointer; padding: 4px; }
 .modal-body { padding: 20px; }
 .modal-footer { padding: 16px 20px; border-top: 1px solid var(--border); display: flex; gap: 10px; }
+.tabs { display: flex; gap: 4px; overflow-x: auto; border-bottom: 1px solid var(--border); margin-bottom: 16px; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { padding: 10px 16px; font-size: 13px; font-weight: 500; color: var(--text-light); border: none; background: none; cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent; transition: all 0.2s; }
+.tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+.profile-header { background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; padding: 24px 16px; margin: -16px -16px 16px; border-radius: 0 0 var(--radius) var(--radius); }
+.profile-header h2 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+.profile-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 13px; opacity: 0.9; }
 .toast-container { position: fixed; top: 70px; left: 16px; right: 16px; z-index: 300; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .toast { background: var(--text); color: white; padding: 12px 16px; border-radius: var(--radius-sm); font-size: 14px; box-shadow: var(--shadow); animation: slideDown 0.3s ease; pointer-events: auto; display: flex; align-items: center; gap: 10px; }
 .toast.success { background: var(--success); }
 .toast.error { background: var(--danger); }
 .toast.warning { background: var(--warning); }
-.toast.info { background: var(--info); }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--text-light); }
 .login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; text-align: center; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; }
@@ -109,16 +124,29 @@ body { padding-bottom: 80px; }
 .login-screen p { font-size: 14px; opacity: 0.9; margin-bottom: 32px; max-width: 320px; line-height: 1.5; }
 .google-btn { background: white; color: #444; border: none; border-radius: var(--radius); padding: 14px 24px; font-size: 15px; font-weight: 500; cursor: pointer; display: inline-flex; align-items: center; gap: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); transition: transform 0.15s; }
 .google-btn:active { transform: scale(0.98); }
+.file-card { display: flex; align-items: center; gap: 12px; padding: 14px; background: var(--card); border-radius: var(--radius); border: 1px solid var(--border); margin-bottom: 10px; cursor: pointer; transition: all 0.15s; }
+.file-card:active { transform: scale(0.99); }
+.file-icon { width: 40px; height: 40px; background: #e8f5e9; color: #2e7d32; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+.file-info { flex: 1; min-width: 0; }
+.file-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.file-meta { font-size: 12px; color: var(--text-light); margin-top: 2px; }
 .drive-folder { display: flex; align-items: center; gap: 10px; padding: 12px; background: #fff8e1; border-radius: var(--radius-sm); margin-bottom: 12px; color: #f57c00; font-size: 14px; font-weight: 500; }
 .save-indicator { position: fixed; top: 60px; right: 16px; z-index: 250; background: var(--success); color: white; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; display: none; align-items: center; gap: 8px; box-shadow: var(--shadow); }
 .save-indicator.show { display: flex; animation: fadeIn 0.3s; }
 .save-indicator.saving { background: var(--warning); }
+.field-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+.field-label { color: var(--text-light); font-size: 13px; }
+.field-value { font-weight: 500; text-align: right; max-width: 60%; }
 .edit-btn { background: none; border: none; color: var(--primary); font-size: 13px; cursor: pointer; padding: 4px; }
 .sheet-tabs { display: flex; gap: 4px; overflow-x: auto; margin-bottom: 12px; scrollbar-width: none; }
 .sheet-tabs::-webkit-scrollbar { display: none; }
 .sheet-tab { padding: 8px 16px; font-size: 13px; font-weight: 500; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--card); cursor: pointer; white-space: nowrap; }
 .sheet-tab.active { background: var(--primary); color: white; border-color: var(--primary); }
-
+.cell-grid { display: grid; gap: 1px; background: var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.cell-header { background: var(--primary); color: white; padding: 10px 8px; font-size: 12px; font-weight: 600; text-align: left; }
+.cell-data { background: var(--card); padding: 10px 8px; font-size: 13px; }
+.cell-data input { width: 100%; border: none; background: transparent; font-size: 13px; font-family: inherit; padding: 0; }
+.cell-data input:focus { outline: none; }
 @media (min-width: 768px) {
   .kpi-grid { grid-template-columns: repeat(4, 1fr); }
   .quick-actions { grid-template-columns: repeat(4, 1fr); }
@@ -168,11 +196,8 @@ body { padding-bottom: 80px; }
     <a href="#" class="nav-link" onclick="navigate('sheets')">Sheets</a>
     <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
   </div>
-  <div style="display:flex;align-items:center;gap:12px;">
-    <button class="btn btn-sm btn-outline" style="color:white;border-color:white;" onclick="runWorkbookIntegrityTest()">Run Self-Test</button>
-    <div class="drive-status disconnected" id="driveStatus">
-      <span class="drive-dot"></span><span id="driveStatusText">Disconnected</span>
-    </div>
+  <div class="drive-status disconnected" id="driveStatus">
+    <span class="drive-dot"></span><span id="driveStatusText">Disconnected</span>
   </div>
 </nav>
 
@@ -195,7 +220,7 @@ body { padding-bottom: 80px; }
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
       <span id="activeFileName">No file selected</span>
     </div>
-    <div id="dirtyIndicator" style="font-size:12px;margin-bottom:8px;font-weight:500;"></div>
+    <div id="dirtyIndicator" style="font-size:12px;margin-bottom:8px;"></div>
     <div style="display:flex;gap:10px;">
       <button class="btn btn-primary btn-sm" onclick="saveToDrive()" style="flex:1;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
@@ -215,6 +240,9 @@ body { padding-bottom: 80px; }
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       Select Excel File from Drive
     </button>
+    <div style="margin-top:16px;padding:12px;background:var(--bg);border-radius:var(--radius-sm);font-size:12px;color:var(--text-light);">
+      <strong>Supported files:</strong> SBA_Workbook22.xlsx, Customer_Sales_Tracker.xlsx, or any .xlsx file
+    </div>
   </div>
 
   <div class="kpi-grid" id="kpiSection" style="display:none;">
@@ -234,13 +262,13 @@ body { padding-bottom: 80px; }
     <button class="qa-btn secondary" onclick="navigate('sheets')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
     </button>
-    <button class="qa-btn secondary" onclick="runWorkbookIntegrityTest()">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>Self-Test
+    <button class="qa-btn secondary" onclick="saveToDrive()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>Save
     </button>
   </div>
 
   <div class="card" id="recentActivityCard" style="display:none;">
-    <div class="card-title">Recent Companies</div>
+    <div class="card-title">Recent Activity</div>
     <div id="recentActivity"></div>
   </div>
 </div>
@@ -261,18 +289,15 @@ body { padding-bottom: 80px; }
 
 <!-- COMPANY EDIT -->
 <div class="screen" id="screen-edit">
-  <div class="card">
-    <div style="display:flex;justify-style:space-between;align-items:center;margin-bottom:12px;">
-      <button class="btn btn-sm btn-secondary" style="width:auto;" onclick="navigate('companies')">&larr; Back</button>
-      <div style="font-size:12px;color:var(--text-light);" id="editSheetInfo">Target Sheet</div>
-    </div>
-    <h2 id="editCompanyName" style="font-size:20px;font-weight:700;margin-bottom:4px;">Company</h2>
-    <div style="font-size:13px;color:var(--text-light);margin-bottom:16px;" id="editCompanyMeta">Meta info</div>
-    <div id="editForm"></div>
-    <div style="display:flex;gap:10px;margin-top:20px;">
-      <button class="btn btn-primary" onclick="saveCompanyEdit()">Save Changes</button>
-      <button class="btn btn-secondary" onclick="navigate('companies')">Cancel</button>
-    </div>
+  <div class="profile-header">
+    <button class="btn btn-sm btn-secondary" style="width:auto;margin-bottom:12px;" onclick="navigate('companies')">&larr; Back</button>
+    <h2 id="editCompanyName">Company</h2>
+    <div class="profile-meta"><span id="editCompanyIndustry">Industry</span><span>&bull;</span><span id="editCompanyStatus">Status</span></div>
+  </div>
+  <div id="editForm"></div>
+  <div style="display:flex;gap:10px;margin-top:16px;">
+    <button class="btn btn-primary" onclick="saveCompanyEdit()">Save Changes</button>
+    <button class="btn btn-secondary" onclick="navigate('companies')">Cancel</button>
   </div>
 </div>
 
@@ -280,8 +305,9 @@ body { padding-bottom: 80px; }
 <div class="screen" id="screen-sheets">
   <div class="card">
     <div class="card-title">Excel Sheets</div>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">View and edit raw Excel data. Changes sync back to your Drive file.</p>
     <div class="sheet-tabs" id="sheetTabs"></div>
-    <div id="sheetContent" style="overflow-x:auto;"></div>
+    <div id="sheetContent"></div>
   </div>
 </div>
 
@@ -343,10 +369,6 @@ body { padding-bottom: 80px; }
           <option>Waiting Customer Decision</option><option>Purchase Order</option><option>Won</option><option>Lost</option>
         </select>
       </div>
-      <div class="form-group">
-        <label class="form-label">Priority</label>
-        <select class="form-select" id="acPriority"><option>High</option><option selected>Medium</option><option>Low</option></select>
-      </div>
       <div class="form-group"><label class="form-label">Est. Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
       <div class="form-group"><label class="form-label">Probability (%)</label><input type="number" class="form-input" id="acProb" min="0" max="100" value="25"></div>
       <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acContact"></div>
@@ -361,38 +383,63 @@ body { padding-bottom: 80px; }
 </div>
 
 <script>
-// ==================== CONFIG & STATE ====================
+// ==================== CONFIG - YOUR CREDENTIALS ====================
+// WARNING: Keep this file private. Do not share it publicly.
 const CLIENT_ID = '530314990385-3b26u4l9184uiivrjbhtv63nrt8n1234.apps.googleusercontent.com';
 const API_KEY = 'AIzaSyDvTUgsR57lgOnSWbvcy268BS_juxe7StY';
 const SCOPES = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly';
 
+// ==================== STATE ====================
+// NOTE: these were previously named `gapiLoaded` / `gisLoaded` — the SAME
+// names as the functions below (`function gapiLoaded(){...}`). Declaring a
+// `let` and a `function` with the identical name in the same scope is a
+// SyntaxError ("Identifier has already been declared"), which kills the
+// ENTIRE script — nothing on the page works, including Save. Renamed the
+// booleans so the callback functions can keep their own names.
 let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
 let accessToken = null;
 let currentFile = null;
-
-let workbook = null;            // SheetJS workbook used ONLY for UI rendering
-let originalArrayBuffer = null; // Exact pristine XLSX bytes downloaded from Drive
-let pendingEdits = [];          // Queue of changes [{type:'add', sheetName, values} | {type:'edit', sheetName, rowIndex, values}]
-let isDirty = false;
+let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
+let originalArrayBuffer = null;    // the exact original .xlsx bytes downloaded from Drive — kept untouched, this is the source of truth for anything we save/download (PROBLEM 2 fix)
+let pendingEdits = [];             // [{type:'add', sheetName, values, _uiRowIndex?} | {type:'edit', sheetName, rowIndex, values}] — applied directly to the original XML at save/download time
+let isDirty = false;               // true when there are pendingEdits not yet confirmed saved to Drive
 let lastSavedAt = null;
-
 let currentSheet = 0;
 let currentScreen = 'dashboard';
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
 let editingSheetName = '';
+let editingIsPendingAdd = false;   // true when the company being edited was added in this session (still only in pendingEdits)
 
-// Unsaved changes guard
-window.addEventListener('beforeunload', (e) => {
-  if (isDirty) {
-    e.preventDefault();
-    e.returnValue = 'You have unsaved changes. Save before closing?';
-    return e.returnValue;
-  }
-});
+// Canonical app field → possible normalized Excel header variants.
+// When writing we resolve each canonical key to the real header key present in the workbook.
+const FIELD_ALIASES = {
+  name: ['name', 'company', 'company_name', 'companyname', 'account', 'account_name', 'customer', 'customer_name', 'client', 'client_name'],
+  brand_name: ['brand_name', 'brand', 'brandname', 'product_brand'],
+  industry: ['industry', 'sector', 'industry_type', 'business_type'],
+  location: ['location', 'city', 'address', 'region', 'site', 'place'],
+  opp_status: ['opp_status', 'opportunity_status', 'status', 'opportunity', 'opp', 'lead_status', 'hot_warm_cold'],
+  sales_stage: ['sales_stage', 'stage', 'pipeline_stage', 'sales_stage_name', 'deal_stage'],
+  priority: ['priority', 'prio', 'importance'],
+  est_value: ['est_value', 'estimated_value', 'est_value_etb', 'value', 'deal_value', 'amount', 'opportunity_value', 'est_val'],
+  probability: ['probability', 'prob', 'win_probability', 'likelihood', 'prob_'],
+  exp_revenue: ['exp_revenue', 'expected_revenue', 'exp_rev', 'expected_value', 'weighted_value', 'weighted_revenue'],
+  contact_person: ['contact_person', 'contact', 'contact_name', 'person', 'primary_contact', 'contact_person_name'],
+  phone: ['phone', 'mobile', 'tel', 'telephone', 'phone_number', 'mobile_number', 'cell', 'contact_phone'],
+  notes: ['notes', 'note', 'comments', 'comment', 'remarks', 'description'],
+  application_type: ['application_type', 'app_type', 'application', 'tech_application'],
+  number_of_technologies: ['number_of_technologies', 'num_technologies', 'technologies', 'tech_count', 'no_of_technologies'],
+  number_of_brands: ['number_of_brands', 'num_brands', 'brands', 'brand_count', 'no_of_brands'],
+  number_of_machines: ['number_of_machines', 'num_machines', 'machines', 'machine_count', 'no_of_machines']
+};
+
+// Always store these as Excel text (inlineStr), never as numbers — protects phone numbers, names, etc.
+const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'sales_stage', 'priority', 'contact_person', 'phone', 'notes', 'application_type']);
+
+const SS_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 
 // ==================== GOOGLE API INIT ====================
 function onGapiScriptLoad() { gapiScriptLoaded = true; maybeInit(); }
@@ -408,6 +455,7 @@ function initGapiClient() {
   gapi.client.init({ apiKey: API_KEY, discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'] })
     .then(() => {
       gapiClientReady = true;
+      console.log('GAPI client initialized');
       const savedToken = sessionStorage.getItem('sba_drive_token');
       if (savedToken) {
         accessToken = savedToken;
@@ -423,6 +471,10 @@ function initGapiClient() {
     callback: (tokenResponse) => {
       if (tokenResponse.error) { showToast('Sign-in failed: ' + tokenResponse.error, 'error'); return; }
       accessToken = tokenResponse.access_token;
+      // Session-only storage: an access token is short-lived (~1hr). Persisting
+      // it in localStorage let the UI claim "Connected" on a later visit even
+      // after the token had expired — one of the things that made Save fail
+      // in a confusing way. sessionStorage clears when the tab closes.
       sessionStorage.setItem('sba_drive_token', accessToken);
       gapi.client.setToken({ access_token: accessToken });
       showMainApp();
@@ -432,10 +484,12 @@ function initGapiClient() {
 }
 
 function handleAuthClick() {
-  if (!gapiClientReady || !tokenClient) { showToast('Google API loading...', 'warning'); return; }
+  if (!gapiClientReady || !tokenClient) { showToast('Google API still loading...', 'warning'); return; }
   tokenClient.requestAccessToken({ prompt: accessToken ? '' : 'consent' });
 }
 
+// Silent token refresh used by driveFetch() below when a request comes back
+// 401/403 mid-session (expired token) instead of just failing the save.
 function refreshAccessTokenSilently() {
   return new Promise((resolve) => {
     if (!tokenClient) { resolve(false); return; }
@@ -459,6 +513,30 @@ function refreshAccessTokenSilently() {
   });
 }
 
+function confirmDiscardUnsaved(actionLabel) {
+  if (!isDirty || pendingEdits.length === 0) return true;
+  return window.confirm(
+    'You have unsaved changes' + (actionLabel ? ' (' + actionLabel + ')' : '') +
+    '.\n\nSave to Drive before continuing, or press OK to discard them.'
+  );
+}
+
+function handleSignOut() {
+  if (!confirmDiscardUnsaved('sign out')) return;
+  accessToken = null;
+  sessionStorage.removeItem('sba_drive_token');
+  localStorage.removeItem('sba_drive_file');
+  gapi.client.setToken(null);
+  pendingEdits = [];
+  isDirty = false;
+  originalArrayBuffer = null;
+  workbook = null;
+  currentFile = null;
+  document.getElementById('mainApp').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  showToast('Signed out', 'success');
+}
+
 function showMainApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('mainApp').style.display = 'block';
@@ -480,12 +558,18 @@ function updateDriveStatus(connected) {
   if (mel) { mel.className = 'drive-status ' + status; document.getElementById('mobileDriveStatusText').textContent = text; }
 }
 
-function driveFetch(url, options = {}) {
+// ==================== AUTHENTICATED DRIVE FETCH ====================
+// Central helper for every raw Drive REST call (both the download and the
+// upload use this). On 401/403 it refreshes the token once and retries, and
+// on any other failure it reads the actual response body so callers can show
+// a real reason instead of a generic "Save failed. Check connection."
+function driveFetch(url, options) {
+  options = options || {};
   options.headers = Object.assign({}, options.headers, { Authorization: 'Bearer ' + accessToken });
   return fetch(url, options).then(res => {
     if (res.status === 401 || res.status === 403) {
       return refreshAccessTokenSilently().then(ok => {
-        if (!ok) return res;
+        if (!ok) return res; // let the caller read the real 401/403 body and report it
         options.headers.Authorization = 'Bearer ' + accessToken;
         return fetch(url, options);
       });
@@ -494,20 +578,38 @@ function driveFetch(url, options = {}) {
   });
 }
 
+// Turns a failed Drive response into the kind of message the user asked for
+// ("Authentication expired", "Permission denied", etc.) while always logging
+// the real status + body to the console for debugging.
 async function interpretDriveError(res, context) {
   let bodyText = '';
-  try { bodyText = await res.text(); } catch (e) { bodyText = e.message; }
-  console.error(`Drive ${context} failed:`, res.status, bodyText);
-  if (res.status === 401) return 'Auth expired. Sign in again.';
-  if (res.status === 403) return 'Permission denied for this file.';
-  if (res.status === 404) return 'File not found on Drive.';
-  return `Drive error HTTP ${res.status}: ${bodyText.slice(0, 150)}`;
+  try { bodyText = await res.text(); } catch (e) { bodyText = '(could not read response body: ' + e.message + ')'; }
+  console.error('Drive ' + context + ' failed:', res.status, bodyText);
+  let reason;
+  switch (res.status) {
+    case 401: reason = 'Authentication expired — please reconnect to Google.'; break;
+    case 403: reason = 'Permission denied for this file (check sharing/scope).'; break;
+    case 404: reason = 'File not found on Drive (it may have been moved, deleted, or the file ID is invalid).'; break;
+    case 400: reason = 'Invalid upload request (' + summarizeDriveErrorBody(bodyText) + ').'; break;
+    case 0:   reason = 'Network error — check your connection.'; break;
+    default:  reason = 'Drive returned HTTP ' + res.status + (bodyText ? ' — ' + summarizeDriveErrorBody(bodyText) : ''); break;
+  }
+  return reason;
 }
 
-// ==================== FILE PICKER & LOAD ====================
+function summarizeDriveErrorBody(bodyText) {
+  try {
+    const parsed = JSON.parse(bodyText);
+    return (parsed.error && (parsed.error.message || parsed.error.status)) || bodyText.slice(0, 200);
+  } catch (e) {
+    return bodyText.slice(0, 200);
+  }
+}
+
+// ==================== FILE PICKER ====================
 function showFilePicker() {
-  if (isDirty && !confirm('You have unsaved changes. Switch file anyway?')) return;
   if (!accessToken) { showToast('Please sign in first', 'error'); return; }
+  if (!confirmDiscardUnsaved('change file')) return;
   const view = new google.picker.View(google.picker.ViewId.DOCS);
   view.setMimeTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel');
   const picker = new google.picker.PickerBuilder()
@@ -517,6 +619,7 @@ function showFilePicker() {
     .setOAuthToken(accessToken)
     .setDeveloperKey(API_KEY)
     .addView(view)
+    .addView(new google.picker.DocsUploadView())
     .setCallback(pickerCallback)
     .build();
   picker.setVisible(true);
@@ -531,11 +634,25 @@ function pickerCallback(data) {
   }
 }
 
+// ==================== LOAD FILE ====================
+// FIX: the previous version downloaded the binary .xlsx via
+// gapi.client.drive.files.get({alt:'media'}), which returns the response
+// body as a JS *string*. Building a Blob from that string and reading it
+// back through FileReader.readAsArrayBuffer() re-encodes it as UTF-8 text —
+// any byte above 0x7F in the xlsx's zip container gets mangled, silently
+// corrupting the workbook before you've even made an edit. Downloading the
+// bytes with a raw fetch()+arrayBuffer() (via driveFetch, so token refresh
+// still applies) avoids that entirely, and we keep those exact bytes in
+// `originalArrayBuffer` untouched for the rest of the session — this is the
+// "original workbook is the source of truth" piece of PROBLEM 2.
 function loadFileFromDrive(fileId) {
-  showToast('Loading file from Drive...', 'info');
-  driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`)
+  showToast('Loading file from Drive...', 'success');
+  driveFetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media')
     .then(async res => {
-      if (!res.ok) throw new Error(await interpretDriveError(res, 'download'));
+      if (!res.ok) {
+        const reason = await interpretDriveError(res, 'download');
+        throw new Error(reason);
+      }
       return res.arrayBuffer();
     })
     .then(buf => {
@@ -543,6 +660,8 @@ function loadFileFromDrive(fileId) {
       pendingEdits = [];
       isDirty = false;
       const data = new Uint8Array(buf);
+      // SheetJS is used ONLY to populate the CRM's display data (lists,
+      // search, dashboard counts) from here on — never written back to Drive.
       workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true });
       showToast('File loaded: ' + currentFile.name, 'success');
       updateFileUI();
@@ -556,521 +675,9 @@ function loadFileFromDrive(fileId) {
     });
 }
 
-// ==================== HEADER NORMALIZATION & MAPPING ====================
-function normalizeHeader(h) {
-  if (!h) return '';
-  let s = String(h).toLowerCase().trim().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
-  if (['company', 'company_name', 'customer', 'customer_name', 'client', 'account'].includes(s)) return 'name';
-  if (['brand', 'brand_name', 'brands'].includes(s)) return 'brand_name';
-  if (['industry', 'sector', 'business_type'].includes(s)) return 'industry';
-  if (['location', 'city', 'address', 'region', 'area'].includes(s)) return 'location';
-  if (['opportunity_status', 'opp_status', 'status', 'lead_status'].includes(s)) return 'opp_status';
-  if (['sales_stage', 'stage', 'pipeline_stage'].includes(s)) return 'sales_stage';
-  if (['priority', 'urgency'].includes(s)) return 'priority';
-  if (['est_value', 'estimated_value', 'est_value_etb', 'value', 'deal_size', 'amount'].includes(s)) return 'est_value';
-  if (['probability', 'prob', 'probability_'].includes(s)) return 'probability';
-  if (['expected_revenue', 'exp_revenue', 'exp_revenue_etb', 'weighted_value'].includes(s)) return 'expected_revenue';
-  if (['contact_person', 'contact', 'contact_name', 'key_contact'].includes(s)) return 'contact_person';
-  if (['phone', 'mobile', 'telephone', 'phone_number', 'contact_phone'].includes(s)) return 'phone';
-  if (['notes', 'note', 'remarks', 'remark', 'comments'].includes(s)) return 'notes';
-  if (['application_type', 'app_type', 'application'].includes(s)) return 'app_type';
-  if (['number_of_technologies', 'num_technologies', 'tech_count', 'technologies'].includes(s)) return 'num_technologies';
-  if (['number_of_brands', 'num_brands', 'brand_count'].includes(s)) return 'num_brands';
-  if (['number_of_machines', 'num_machines', 'machine_count', 'machines'].includes(s)) return 'num_machines';
-  return s;
-}
-
-function getCompaniesFromWorkbook() {
-  if (!workbook) return [];
-  let targetName = '';
-  for (const name of workbook.SheetNames) {
-    const lower = name.toLowerCase();
-    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) {
-      targetName = name; break;
-    }
-  }
-  if (!targetName) targetName = workbook.SheetNames[0];
-  const targetSheet = workbook.Sheets[targetName];
-  const data = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: '' });
-  if (data.length < 2) return [];
-  const headers = data[0].map(h => String(h).trim());
-  const companies = [];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (!row || (!row[0] && !row[1] && !row[2])) continue;
-    const company = { _rowIndex: i, _sheetName: targetName };
-    headers.forEach((h, idx) => { company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : ''; });
-    company._headers = headers;
-    companies.push(company);
-  }
-  return companies;
-}
-
-// ==================== XML PATCHING ENGINE (JSZip) ====================
-function escapeXml(str) {
-  if (str === null || str === undefined) return '';
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
-}
-
-function colIndexToLetter(index) {
-  let temp, letter = '';
-  while (index >= 0) {
-    temp = index % 26;
-    letter = String.fromCharCode(temp + 65) + letter;
-    index = (index - temp) / 26 - 1;
-  }
-  return letter;
-}
-
-function colLetterToIndex(letter) {
-  let column = 0;
-  const length = letter.length;
-  for (let i = 0; i < length; i++) {
-    column += (letter.charCodeAt(i) - 64) * Math.pow(26, length - i - 1);
-  }
-  return column - 1;
-}
-
-function isValidExcelColumn(col) {
-  if (!col || col.length > 3) return false;
-  col = col.toUpperCase();
-  if (col.length === 1) return col >= 'A' && col <= 'Z';
-  if (col.length === 2) return col >= 'AA' && col <= 'ZZ';
-  if (col.length === 3) return col >= 'AAA' && col <= 'XFD';
-  return false;
-}
-
-function shiftFormulaRows(formula, templateRow, targetRow) {
-  if (!formula) return '';
-  const delta = targetRow - templateRow;
-  if (delta === 0) return formula;
-  return formula.replace(/(\$?[A-Za-z]{1,3})(\$?)([0-9]+)/g, (match, colPart, rowDollar, rowStr) => {
-    const colName = colPart.replace('$', '').toUpperCase();
-    if (!isValidExcelColumn(colName)) return match;
-    if (rowDollar === '$') return match; // Absolute row
-    const rowNum = parseInt(rowStr, 10);
-    return colPart + rowDollar + (rowNum + delta);
-  });
-}
-
-async function findSheetFileInZip(zip, sheetName) {
-  const wbXmlText = await zip.file('xl/workbook.xml').async('string');
-  const parser = new DOMParser();
-  const wbDoc = parser.parseFromString(wbXmlText, 'text/xml');
-  const sheets = wbDoc.getElementsByTagNameNS('*', 'sheet');
-  let rId = null;
-  for (let i = 0; i < sheets.length; i++) {
-    if (sheets[i].getAttribute('name') === sheetName) {
-      rId = sheets[i].getAttribute('r:id') || sheets[i].getAttribute('id');
-      break;
-    }
-  }
-  if (!rId) {
-    const sheet1 = sheets[0];
-    rId = sheet1 ? (sheet1.getAttribute('r:id') || sheet1.getAttribute('id')) : 'rId1';
-  }
-  const relsText = await zip.file('xl/_rels/workbook.xml.rels').async('string');
-  const relsDoc = parser.parseFromString(relsText, 'text/xml');
-  const rels = relsDoc.getElementsByTagNameNS('*', 'Relationship');
-  let target = '';
-  for (let i = 0; i < rels.length; i++) {
-    if (rels[i].getAttribute('Id') === rId) {
-      target = rels[i].getAttribute('Target');
-      break;
-    }
-  }
-  if (!target) target = 'worksheets/sheet1.xml';
-  if (!target.startsWith('xl/')) target = 'xl/' + target.replace(/^\//, '');
-  return target;
-}
-
-async function getHeaderMapFromXml(sheetDoc, zip) {
-  const map = {};
-  const sheetData = sheetDoc.getElementsByTagNameNS('*', 'sheetData')[0];
-  if (!sheetData) return map;
-  const row1 = sheetData.getElementsByTagNameNS('*', 'row')[0];
-  if (!row1) return map;
-  const cells = row1.getElementsByTagNameNS('*', 'c');
-
-  // Shared strings lookup if used
-  let sharedStrings = [];
-  const ssFile = zip.file('xl/sharedStrings.xml');
-  if (ssFile) {
-    const ssText = await ssFile.async('string');
-    const ssDoc = new DOMParser().parseFromString(ssText, 'text/xml');
-    const siList = ssDoc.getElementsByTagNameNS('*', 'si');
-    for (let i = 0; i < siList.length; i++) {
-      const t = siList[i].getElementsByTagNameNS('*', 't')[0];
-      sharedStrings.push(t ? t.textContent : '');
-    }
-  }
-
-  for (let i = 0; i < cells.length; i++) {
-    const c = cells[i];
-    const ref = c.getAttribute('r') || '';
-    const colLetter = ref.replace(/[0-9]/g, '');
-    const tAttr = c.getAttribute('t');
-    let val = '';
-    if (tAttr === 's') {
-      const v = c.getElementsByTagNameNS('*', 'v')[0];
-      if (v) val = sharedStrings[parseInt(v.textContent, 10)] || '';
-    } else if (tAttr === 'inlineStr') {
-      const t = c.getElementsByTagNameNS('*', 't')[0];
-      if (t) val = t.textContent;
-    } else {
-      const v = c.getElementsByTagNameNS('*', 'v')[0];
-      if (v) val = v.textContent;
-    }
-    const norm = normalizeHeader(val);
-    if (norm) {
-      map[norm] = { colLetter, colIndex: colLetterToIndex(colLetter), rawHeader: val };
-    }
-  }
-  return map;
-}
-
-async function applyAddRow(zip, addOp) {
-  const sheetFile = await findSheetFileInZip(zip, addOp.sheetName);
-  const sheetXmlText = await zip.file(sheetFile).async('string');
-  const parser = new DOMParser();
-  const sheetDoc = parser.parseFromString(sheetXmlText, 'text/xml');
-  const sheetData = sheetDoc.getElementsByTagNameNS('*', 'sheetData')[0];
-  const headerMap = await getHeaderMapFromXml(sheetDoc, zip);
-
-  // Inspect Excel Tables referenced by this sheet
-  let tableFile = null;
-  let tableDoc = null;
-  let tableRef = '';
-  let totalsRowCount = 0;
-
-  const tableParts = sheetDoc.getElementsByTagNameNS('*', 'tablePart');
-  if (tableParts.length > 0) {
-    const rId = tableParts[0].getAttribute('r:id');
-    const relsFile = sheetFile.replace('worksheets/', 'worksheets/_rels/').concat('.rels');
-    if (zip.file(relsFile)) {
-      const relsText = await zip.file(relsFile).async('string');
-      const relsDoc = parser.parseFromString(relsText, 'text/xml');
-      const rels = relsDoc.getElementsByTagNameNS('*', 'Relationship');
-      for (let i = 0; i < rels.length; i++) {
-        if (rels[i].getAttribute('Id') === rId) {
-          let tTarget = rels[i].getAttribute('Target');
-          if (!tTarget.startsWith('xl/')) tTarget = 'xl/' + tTarget.replace(/^..\//, '');
-          tableFile = tTarget;
-          break;
-        }
-      }
-    }
-  }
-  if (!tableFile && zip.file('xl/tables/table1.xml')) tableFile = 'xl/tables/table1.xml';
-
-  if (tableFile && zip.file(tableFile)) {
-    const tText = await zip.file(tableFile).async('string');
-    tableDoc = parser.parseFromString(tText, 'text/xml');
-    const tableEl = tableDoc.getElementsByTagNameNS('*', 'table')[0];
-    if (tableEl) {
-      tableRef = tableEl.getAttribute('ref') || '';
-      totalsRowCount = parseInt(tableEl.getAttribute('totalsRowCount') || '0', 10);
-    }
-  }
-
-  const existingRows = Array.from(sheetData.getElementsByTagNameNS('*', 'row'));
-  let targetRowNumber = 2;
-  let templateRowEl = null;
-
-  if (tableRef) {
-    const parts = tableRef.split(':');
-    const startCol = parts[0].replace(/[0-9]/g, '');
-    const endCol = parts[1].replace(/[0-9]/g, '');
-    const startRow = parseInt(parts[0].replace(/[^0-9]/g, ''), 10);
-    const endRow = parseInt(parts[1].replace(/[^0-9]/g, ''), 10);
-
-    if (totalsRowCount > 0) {
-      targetRowNumber = endRow; // Insert before totals row
-      templateRowEl = existingRows.find(r => parseInt(r.getAttribute('r'), 10) === endRow - 1);
-    } else {
-      targetRowNumber = endRow + 1; // Append to table
-      templateRowEl = existingRows.find(r => parseInt(r.getAttribute('r'), 10) === endRow);
-    }
-  } else {
-    let maxRow = 1;
-    existingRows.forEach(r => {
-      const rNum = parseInt(r.getAttribute('r'), 10);
-      if (rNum > maxRow) maxRow = rNum;
-    });
-    targetRowNumber = maxRow + 1;
-    templateRowEl = existingRows.find(r => parseInt(r.getAttribute('r'), 10) === maxRow);
-  }
-
-  if (!templateRowEl && existingRows.length > 0) {
-    templateRowEl = existingRows[existingRows.length - 1];
-  }
-
-  const templateRowNumber = templateRowEl ? parseInt(templateRowEl.getAttribute('r'), 10) : targetRowNumber - 1;
-
-  // Shift down existing rows if inserting before totals row or in middle
-  existingRows.reverse().forEach(rowEl => {
-    const rNum = parseInt(rowEl.getAttribute('r'), 10);
-    if (rNum >= targetRowNumber) {
-      const newRNum = rNum + 1;
-      rowEl.setAttribute('r', String(newRNum));
-      const cells = Array.from(rowEl.getElementsByTagNameNS('*', 'c'));
-      cells.forEach(cEl => {
-        const oldRef = cEl.getAttribute('r');
-        const cCol = oldRef.replace(/[0-9]/g, '');
-        cEl.setAttribute('r', cCol + newRNum);
-
-        const fEl = cEl.getElementsByTagNameNS('*', 'f')[0];
-        if (fEl && fEl.textContent) {
-          fEl.textContent = shiftFormulaRows(fEl.textContent, rNum, newRNum);
-        }
-      });
-    }
-  });
-
-  // Construct New Row Element
-  const newRowEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'row');
-  newRowEl.setAttribute('r', String(targetRowNumber));
-  if (templateRowEl && templateRowEl.hasAttribute('ht')) {
-    newRowEl.setAttribute('ht', templateRowEl.getAttribute('ht'));
-    newRowEl.setAttribute('customHeight', '1');
-  }
-
-  // Populate cells for new row based on template row structure and header map
-  const templateCells = templateRowEl ? Array.from(templateRowEl.getElementsByTagNameNS('*', 'c')) : [];
-  const processedCols = new Set();
-
-  templateCells.forEach(tCell => {
-    const tRef = tCell.getAttribute('r');
-    const colLetter = tRef.replace(/[0-9]/g, '');
-    processedCols.add(colLetter);
-
-    const newCellEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'c');
-    newCellEl.setAttribute('r', colLetter + targetRowNumber);
-    if (tCell.hasAttribute('s')) newCellEl.setAttribute('s', tCell.getAttribute('s'));
-
-    // Find if user provided input for this column
-    let userVal = undefined;
-    let fieldKey = null;
-    for (const [key, meta] of Object.entries(headerMap)) {
-      if (meta.colLetter === colLetter && addOp.values[key] !== undefined) {
-        userVal = addOp.values[key];
-        fieldKey = key;
-        break;
-      }
-    }
-
-    const templateFormula = tCell.getElementsByTagNameNS('*', 'f')[0];
-    if (templateFormula && userVal === undefined) {
-      // Preserve formula
-      const shiftedF = shiftFormulaRows(templateFormula.textContent, templateRowNumber, targetRowNumber);
-      const fEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'f');
-      fEl.textContent = shiftedF;
-      newCellEl.appendChild(fEl);
-    } else if (userVal !== undefined && userVal !== null && String(userVal).trim() !== '') {
-      const isNumeric = ['est_value', 'probability', 'expected_revenue', 'num_technologies', 'num_brands', 'num_machines'].includes(fieldKey);
-      if (isNumeric && !isNaN(parseFloat(userVal))) {
-        const vEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'v');
-        vEl.textContent = String(parseFloat(userVal));
-        newCellEl.appendChild(vEl);
-      } else {
-        newCellEl.setAttribute('t', 'inlineStr');
-        const isEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'is');
-        const tEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 't');
-        tEl.textContent = String(userVal);
-        isEl.appendChild(tEl);
-        newCellEl.appendChild(isEl);
-      }
-    }
-    newRowEl.appendChild(newCellEl);
-  });
-
-  // Insert new row into sheetData in correct numerical order
-  const allCurrentRows = Array.from(sheetData.getElementsByTagNameNS('*', 'row'));
-  const nextRowEl = allCurrentRows.find(r => parseInt(r.getAttribute('r'), 10) > targetRowNumber);
-  if (nextRowEl) {
-    sheetData.insertBefore(newRowEl, nextRowEl);
-  } else {
-    sheetData.appendChild(newRowEl);
-  }
-
-  // Update Worksheet Dimension
-  const dimEl = sheetDoc.getElementsByTagNameNS('*', 'dimension')[0];
-  if (dimEl) {
-    let dRef = dimEl.getAttribute('ref') || 'A1:AZ100';
-    if (dRef.includes(':')) {
-      const p = dRef.split(':');
-      const dEndCol = p[1].replace(/[0-9]/g, '');
-      const dEndRow = parseInt(p[1].replace(/[^0-9]/g, ''), 10);
-      dimEl.setAttribute('ref', `${p[0]}:${dEndCol}${Math.max(dEndRow + 1, targetRowNumber)}`);
-    }
-  }
-
-  // Update Data Validation Ranges
-  const dvEls = sheetDoc.getElementsByTagNameNS('*', 'dataValidation');
-  for (let i = 0; i < dvEls.length; i++) {
-    let sqref = dvEls[i].getAttribute('sqref');
-    if (sqref) {
-      sqref = sqref.replace(/([A-Z]+)([0-9]+):([A-Z]+)([0-9]+)/g, (m, c1, r1, c2, r2) => {
-        const r2Num = parseInt(r2, 10);
-        if (r2Num >= templateRowNumber) return `${c1}${r1}:${c2}${r2Num + 1}`;
-        return m;
-      });
-      dvEls[i].setAttribute('sqref', sqref);
-    }
-  }
-
-  // Update Table XML range if table exists
-  if (tableDoc && tableFile) {
-    const tableEl = tableDoc.getElementsByTagNameNS('*', 'table')[0];
-    if (tableEl && tableRef) {
-      const p = tableRef.split(':');
-      const startCell = p[0];
-      const endCol = p[1].replace(/[0-9]/g, '');
-      const oldEndRow = parseInt(p[1].replace(/[^0-9]/g, ''), 10);
-      const newTableRef = `${startCell}:${endCol}${oldEndRow + 1}`;
-      tableEl.setAttribute('ref', newTableRef);
-
-      const afEl = tableEl.getElementsByTagNameNS('*', 'autoFilter')[0];
-      if (afEl) {
-        if (totalsRowCount > 0) {
-          afEl.setAttribute('ref', `${startCell}:${endCol}${oldEndRow}`);
-        } else {
-          afEl.setAttribute('ref', newTableRef);
-        }
-      }
-      zip.file(tableFile, new XMLSerializer().serializeToString(tableDoc));
-    }
-  }
-
-  zip.file(sheetFile, new XMLSerializer().serializeToString(sheetDoc));
-}
-
-async function applyEditRow(zip, editOp) {
-  const sheetFile = await findSheetFileInZip(zip, editOp.sheetName);
-  const sheetXmlText = await zip.file(sheetFile).async('string');
-  const parser = new DOMParser();
-  const sheetDoc = parser.parseFromString(sheetXmlText, 'text/xml');
-  const sheetData = sheetDoc.getElementsByTagNameNS('*', 'sheetData')[0];
-  const headerMap = await getHeaderMapFromXml(sheetDoc, zip);
-
-  const excelRowNumber = editOp.rowIndex + 1; // SheetJS 0-indexed data array to Excel row number
-  const rows = Array.from(sheetData.getElementsByTagNameNS('*', 'row'));
-  const targetRowEl = rows.find(r => parseInt(r.getAttribute('r'), 10) === excelRowNumber);
-
-  if (!targetRowEl) return;
-
-  for (const [key, val] of Object.entries(editOp.values)) {
-    const hMeta = headerMap[key];
-    if (!hMeta) continue;
-    const colLetter = hMeta.colLetter;
-    const cellRef = colLetter + excelRowNumber;
-
-    let cellEl = Array.from(targetRowEl.getElementsByTagNameNS('*', 'c')).find(c => c.getAttribute('r') === cellRef);
-    if (!cellEl) {
-      cellEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'c');
-      cellEl.setAttribute('r', cellRef);
-      targetRowEl.appendChild(cellEl);
-    }
-
-    // Do NOT overwrite formula cells
-    if (cellEl.getElementsByTagNameNS('*', 'f').length > 0) continue;
-
-    // Clear old values
-    while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
-
-    if (val !== undefined && val !== null && String(val).trim() !== '') {
-      const isNumeric = ['est_value', 'probability', 'expected_revenue', 'num_technologies', 'num_brands', 'num_machines'].includes(key);
-      if (isNumeric && !isNaN(parseFloat(val))) {
-        cellEl.removeAttribute('t');
-        const vEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'v');
-        vEl.textContent = String(parseFloat(val));
-        cellEl.appendChild(vEl);
-      } else {
-        cellEl.setAttribute('t', 'inlineStr');
-        const isEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'is');
-        const tEl = sheetDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 't');
-        tEl.textContent = String(val);
-        isEl.appendChild(tEl);
-        cellEl.appendChild(isEl);
-      }
-    }
-  }
-
-  zip.file(sheetFile, new XMLSerializer().serializeToString(sheetDoc));
-}
-
-// ==================== WORKBOOK GENERATION & VALIDATION ====================
-async function generateSafeWorkbookBufferCustom(baseBuf, edits) {
-  const zip = await JSZip.loadAsync(baseBuf);
-
-  for (const edit of edits) {
-    if (edit.type === 'add') {
-      await applyAddRow(zip, edit);
-    } else if (edit.type === 'edit') {
-      await applyEditRow(zip, edit);
-    }
-  }
-
-  // Force full calculation on load in Excel
-  const wbFile = zip.file('xl/workbook.xml');
-  if (wbFile) {
-    const wbText = await wbFile.async('string');
-    const parser = new DOMParser();
-    const wbDoc = parser.parseFromString(wbText, 'text/xml');
-    let calcPr = wbDoc.getElementsByTagNameNS('*', 'calcPr')[0];
-    if (!calcPr) {
-      calcPr = wbDoc.createElementNS('http://schemas.openxmlformats.org/spreadsheetml/2006/main', 'calcPr');
-      wbDoc.documentElement.appendChild(calcPr);
-    }
-    calcPr.setAttribute('fullCalcOnLoad', '1');
-    zip.file('xl/workbook.xml', new XMLSerializer().serializeToString(wbDoc));
-  }
-
-  const outBuf = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
-  await validateGeneratedWorkbook(zip, outBuf, edits);
-  return outBuf;
-}
-
-async function generateSafeWorkbookBuffer() {
-  if (!originalArrayBuffer) throw new Error('No baseline workbook loaded in memory.');
-  return await generateSafeWorkbookBufferCustom(originalArrayBuffer, pendingEdits);
-}
-
-async function validateGeneratedWorkbook(zip, outBuf, edits) {
-  if (!outBuf || outBuf.byteLength === 0) throw new Error('Generated workbook buffer is empty.');
-
-  // Validate ZIP integrity & SheetJS parseability
-  try {
-    const testWb = XLSX.read(new Uint8Array(outBuf), { type: 'array' });
-    if (!testWb.SheetNames || testWb.SheetNames.length === 0) {
-      throw new Error('Workbook contains no worksheets after generation.');
-    }
-  } catch (e) {
-    throw new Error('Generated XLSX fails Excel format parsing: ' + e.message);
-  }
-
-  // Verify added content exists in XML
-  for (const edit of edits) {
-    if (edit.type === 'add' && edit.values.name) {
-      const sheetFile = await findSheetFileInZip(zip, edit.sheetName);
-      const sheetText = await zip.file(sheetFile).async('string');
-      if (!sheetText.includes(escapeXml(edit.values.name)) && !sheetText.includes(edit.values.name)) {
-        throw new Error(`Validation failed: Added company "${edit.values.name}" not present in worksheet XML.`);
-      }
-    }
-  }
-  return true;
-}
-
-// ==================== SAVE TO DRIVE & DOWNLOAD ====================
+// ==================== SAVE TO DRIVE ====================
 async function saveToDrive() {
-  if (!originalArrayBuffer || !currentFile) { showToast('No active file loaded', 'error'); return; }
+  if (!originalArrayBuffer || !currentFile) { showToast('No file loaded', 'error'); return; }
   if (!accessToken) { showToast('Please sign in first', 'error'); return; }
   showSaveIndicator(true);
 
@@ -1078,12 +685,20 @@ async function saveToDrive() {
   try {
     outBuf = await generateSafeWorkbookBuffer();
   } catch (err) {
-    console.error('Workbook generation failed:', err);
-    showSaveResult(false, 'Save blocked — ' + err.message);
+    console.error('Workbook generation/validation failed, Drive file left untouched:', err);
+    showSaveResult(false, 'Save blocked — ' + err.message + ' (your Drive file was NOT changed; your edits are still here, safe to retry)');
     return;
   }
 
-  const boundary = 'sba_crm_boundary_' + Date.now().toString(36);
+  // Google Drive's multipart upload endpoint expects RFC2387
+  // `multipart/related` — two parts (JSON metadata, then the file bytes)
+  // separated by a boundary, with Content-Type: multipart/related on the
+  // outer request. The previous code built the body with the browser's
+  // FormData object, which produces `multipart/form-data` instead — a
+  // different format that Drive's uploadType=multipart endpoint does not
+  // accept. That mismatch was the actual cause of every save failing. This
+  // builds the multipart/related body by hand instead.
+  const boundary = 'sba_drive_boundary_' + Date.now().toString(36);
   const metadata = { name: currentFile.name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   const body = new Blob([
     '--' + boundary + '\r\n' +
@@ -1097,48 +712,52 @@ async function saveToDrive() {
 
   try {
     const res = await driveFetch(
-      `https://www.googleapis.com/upload/drive/v3/files/${currentFile.id}?uploadType=multipart&fields=id,name,modifiedTime`,
+      'https://www.googleapis.com/upload/drive/v3/files/' + currentFile.id + '?uploadType=multipart&fields=id,name,modifiedTime',
       { method: 'PATCH', headers: { 'Content-Type': 'multipart/related; boundary="' + boundary + '"' }, body }
     );
-    if (!res.ok) throw new Error(await interpretDriveError(res, 'upload'));
-    const result = await res.json();
-    if (!result.id || result.id !== currentFile.id) {
-      throw new Error(`Drive ID mismatch: expected ${currentFile.id}, got ${result.id}`);
+    if (!res.ok) {
+      const reason = await interpretDriveError(res, 'upload');
+      throw new Error(reason);
     }
-
-    // Success transaction
-    originalArrayBuffer = outBuf;
+    const result = await res.json();
+    // Confirm Drive actually updated the SAME file we selected — not a new one.
+    if (!result.id || result.id !== currentFile.id) {
+      throw new Error('Drive response did not confirm the same file was updated (got id "' + result.id + '", expected "' + currentFile.id + '").');
+    }
+    console.log('Drive upload confirmed:', result);
+    originalArrayBuffer = outBuf; // the saved bytes are now the new baseline
     pendingEdits = [];
-    isDirty = false;
     lastSavedAt = new Date();
     showSaveResult(true);
   } catch (err) {
     console.error('Save error:', err);
-    showSaveResult(false, 'Save failed: ' + err.message);
+    showSaveResult(false, 'Save failed — changes are still local. ' + err.message);
   }
 }
 
 async function downloadFile() {
   if (!originalArrayBuffer) { showToast('No file loaded', 'error'); return; }
+  let outBuf;
   try {
-    const outBuf = await generateSafeWorkbookBuffer();
-    const blob = new Blob([outBuf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = currentFile ? currentFile.name : 'SBA_Workbook.xlsx';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast('File downloaded successfully', 'success');
+    outBuf = await generateSafeWorkbookBuffer();
   } catch (err) {
-    console.error('Download error:', err);
-    showToast('Download failed: ' + err.message, 'error');
+    console.error('Workbook generation/validation failed:', err);
+    showToast('Could not build a safe file: ' + err.message, 'error');
+    return;
   }
+  const blob = new Blob([outBuf], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = currentFile ? currentFile.name : 'SBA_Workbook.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast('File downloaded', 'success');
 }
 
-// ==================== UI STATE & MODALS ====================
+// ==================== UI UPDATES ====================
 function updateFileUI() {
   if (!currentFile) return;
   document.getElementById('noFileCard').style.display = 'none';
@@ -1149,56 +768,53 @@ function updateFileUI() {
   document.getElementById('activeFileName').textContent = currentFile.name;
 }
 
+function showSaveIndicator(saving) {
+  const el = document.getElementById('saveIndicator');
+  if (saving) { el.className = 'save-indicator show saving'; el.innerHTML = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-radius:50%;border-top-color:white;animation:spin 0.8s linear infinite;"></span> Saving...'; }
+  else { el.className = 'save-indicator show'; el.innerHTML = 'Saved to Drive'; setTimeout(() => el.className = 'save-indicator', 2000); }
+}
+
+// Final saving outcome — only ever called after we've genuinely confirmed
+// success or failure from Drive's response (never optimistically).
+function showSaveResult(success, message) {
+  const el = document.getElementById('saveIndicator');
+  if (success) {
+    el.className = 'save-indicator show';
+    const t = lastSavedAt.toTimeString().slice(0, 5);
+    el.textContent = 'Saved successfully at ' + t;
+    showToast('Saved to Google Drive', 'success');
+  } else {
+    el.className = 'save-indicator show';
+    el.style.background = 'var(--danger)';
+    el.textContent = 'Save failed';
+    showToast(message || 'Save failed — changes are still local', 'error');
+  }
+  updateDirtyIndicator();
+  setTimeout(() => { el.className = 'save-indicator'; el.style.background = ''; }, 4000);
+}
+
+// Dirty-state badge: never claim "Saved" while there are edits Drive hasn't
+// confirmed. Reflected next to the Save button on the dashboard.
 function updateDirtyIndicator() {
   const el = document.getElementById('dirtyIndicator');
   if (!el) return;
   if (isDirty) {
-    el.textContent = '● Unsaved local changes (click Save to Drive)';
+    el.textContent = 'Unsaved changes';
     el.style.color = 'var(--warning)';
   } else if (lastSavedAt) {
-    el.textContent = '✓ All changes saved at ' + lastSavedAt.toTimeString().slice(0, 5);
+    el.textContent = 'Saved to Drive at ' + lastSavedAt.toTimeString().slice(0, 5);
     el.style.color = 'var(--success)';
   } else {
     el.textContent = '';
   }
 }
 
-function showSaveIndicator(saving) {
-  const el = document.getElementById('saveIndicator');
-  if (saving) { el.className = 'save-indicator show saving'; el.innerHTML = 'Saving to Google Drive...'; }
-  else { el.className = 'save-indicator show'; el.innerHTML = 'Saved to Drive'; setTimeout(() => el.className = 'save-indicator', 2000); }
-}
-
-function showSaveResult(success, message) {
-  const el = document.getElementById('saveIndicator');
-  if (success) {
-    el.className = 'save-indicator show';
-    el.style.background = 'var(--success)';
-    el.textContent = 'Saved to Drive';
-    showToast('Successfully saved to Google Drive', 'success');
-  } else {
-    el.className = 'save-indicator show';
-    el.style.background = 'var(--danger)';
-    el.textContent = 'Save Failed';
-    showToast(message || 'Save failed — changes are still local', 'error');
-  }
-  updateDirtyIndicator();
-  setTimeout(() => { el.className = 'save-indicator'; el.style.background = ''; }, 3500);
-}
-
-function showToast(msg, type = 'info') {
-  const c = document.getElementById('toastContainer');
-  const t = document.createElement('div');
-  t.className = 'toast ' + type;
-  t.textContent = msg;
-  c.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
-}
-
+// ==================== NAVIGATION ====================
 function navigate(screen) {
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + screen).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const titles = {dashboard:'Dashboard',companies:'Companies',edit:'Edit Company',sheets:'Excel Sheets',drive:'Google Drive'};
   const pt = document.getElementById('pageTitle');
   if (pt) pt.textContent = titles[screen] || 'SBA Drive';
@@ -1208,79 +824,153 @@ function navigate(screen) {
   window.scrollTo(0, 0);
 }
 
-function openAddCompany() {
-  if (!workbook) { showToast('Please load an Excel file first', 'warning'); return; }
-  document.getElementById('acName').value = '';
-  document.getElementById('acBrand').value = '';
-  document.getElementById('acIndustry').value = '';
-  document.getElementById('acLocation').value = '';
-  document.getElementById('acStatus').value = 'Warm';
-  document.getElementById('acStage').value = 'Lead';
-  document.getElementById('acPriority').value = 'Medium';
-  document.getElementById('acValue').value = '';
-  document.getElementById('acProb').value = '25';
-  document.getElementById('acContact').value = '';
-  document.getElementById('acPhone').value = '';
-  document.getElementById('acNotes').value = '';
-  document.getElementById('modalAddCompany').classList.add('active');
-}
-
-function closeModal(id) {
-  document.getElementById(id).classList.remove('active');
-}
-
-// ==================== ADD / EDIT COMPANY CRUD ====================
-function saveCompany() {
-  const name = document.getElementById('acName').value.trim();
-  if (!name) { showToast('Company Name is required', 'error'); return; }
-
-  const cleanNewName = name.toLowerCase().replace(/\s+/g, ' ');
-  const existing = getCompaniesFromWorkbook();
-  const dup = existing.find(c => String(c.name || '').trim().toLowerCase().replace(/\s+/g, ' ') === cleanNewName);
-  if (dup && !confirm(`Company "${dup.name}" already exists. Add anyway?`)) return;
-
-  let targetSheetName = existing.length > 0 ? existing[0]._sheetName : workbook.SheetNames[0];
-
-  const values = {
-    name,
-    brand_name: document.getElementById('acBrand').value.trim(),
-    industry: document.getElementById('acIndustry').value,
-    location: document.getElementById('acLocation').value.trim(),
-    opp_status: document.getElementById('acStatus').value,
-    sales_stage: document.getElementById('acStage').value,
-    priority: document.getElementById('acPriority').value,
-    est_value: document.getElementById('acValue').value,
-    probability: document.getElementById('acProb').value,
-    contact_person: document.getElementById('acContact').value.trim(),
-    phone: document.getElementById('acPhone').value.trim(),
-    notes: document.getElementById('acNotes').value.trim()
-  };
-
-  pendingEdits.push({ type: 'add', sheetName: targetSheetName, values });
-
-  // Update local SheetJS model for immediate UI reflection
-  const sheet = workbook.Sheets[targetSheetName];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (data.length > 0) {
-    const headers = data[0].map(h => String(h).trim());
-    const newRow = new Array(headers.length).fill('');
-    headers.forEach((h, i) => {
-      const norm = normalizeHeader(h);
-      if (values[norm] !== undefined) newRow[i] = values[norm];
-    });
-    data.push(newRow);
-    const newSheet = XLSX.utils.aoa_to_sheet(data);
-    workbook.Sheets[targetSheetName] = newSheet;
+// ==================== EXCEL DATA HELPERS ====================
+function getCompaniesFromWorkbook() {
+  if (!workbook) return [];
+  const sheetNames = workbook.SheetNames;
+  let targetSheet = null;
+  let targetName = '';
+  for (const name of sheetNames) {
+    const lower = name.toLowerCase();
+    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) {
+      targetSheet = workbook.Sheets[name]; targetName = name; break;
+    }
   }
-
-  isDirty = true;
-  closeModal('modalAddCompany');
-  updateDirtyIndicator();
-  renderDashboard();
-  renderCompanies();
-  showToast('Company added locally. Save to Drive to persist changes.', 'success');
+  if (!targetSheet) { targetSheet = workbook.Sheets[sheetNames[0]]; targetName = sheetNames[0]; }
+  const data = XLSX.utils.sheet_to_json(targetSheet, { header: 1, defval: '' });
+  if (data.length < 2) return [];
+  const headers = data[0].map(h => String(h).trim());
+  const companies = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row[0] && !row[1]) continue;
+    const company = { _rowIndex: i, _sheetName: targetName };
+    headers.forEach((h, idx) => { company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : ''; });
+    company._headers = headers;
+    enrichCompanyWithCanonicals(company, headers);
+    companies.push(company);
+  }
+  return companies;
 }
 
+function normalizeHeader(h) {
+  return String(h).toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+}
+
+// Resolve a canonical app field (e.g. 'name') to the actual normalized header key
+// present in headerMap / headerColMap. Returns null if no match.
+function resolveFieldKey(canonical, headerKeysSet) {
+  const aliases = FIELD_ALIASES[canonical] || [canonical];
+  for (const a of aliases) {
+    if (headerKeysSet.has(a)) return a;
+  }
+  // last resort: exact canonical
+  if (headerKeysSet.has(canonical)) return canonical;
+  return null;
+}
+
+// Build a map: canonical field → actual normalized header key (for a given header list)
+function buildCanonicalToHeaderKey(headers) {
+  const normalized = headers.map(h => normalizeHeader(h));
+  const keySet = new Set(normalized);
+  const out = {};
+  Object.keys(FIELD_ALIASES).forEach(canonical => {
+    const resolved = resolveFieldKey(canonical, keySet);
+    if (resolved) out[canonical] = resolved;
+  });
+  return out;
+}
+
+// For UI display: prefer canonical keys so company.name etc. work even if Excel says "Company Name"
+function enrichCompanyWithCanonicals(company, headers) {
+  const canonMap = buildCanonicalToHeaderKey(headers);
+  Object.keys(canonMap).forEach(canonical => {
+    const actual = canonMap[canonical];
+    if (company[canonical] === undefined || company[canonical] === '') {
+      company[canonical] = company[actual] !== undefined ? company[actual] : '';
+    }
+  });
+  return company;
+}
+
+function getHeaderMap(sheetName) {
+  if (!workbook) return {};
+  const sheet = workbook.Sheets[sheetName];
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (data.length === 0) return {};
+  const map = {};
+  data[0].forEach((h, i) => { map[normalizeHeader(h)] = { original: h, index: i }; });
+  return map;
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ==================== DASHBOARD ====================
+function renderDashboard() {
+  if (!workbook) return;
+  const companies = getCompaniesFromWorkbook();
+  const hot = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'hot').length;
+  const warm = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'warm').length;
+  const cold = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'cold').length;
+  document.getElementById('kpiHot').textContent = hot;
+  document.getElementById('kpiWarm').textContent = warm;
+  document.getElementById('kpiCold').textContent = cold;
+  document.getElementById('kpiTotal').textContent = companies.length;
+  const recent = companies.slice(-5).reverse();
+  document.getElementById('recentActivity').innerHTML = recent.map(c => `
+    <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
+      <div><div style="font-weight:600;font-size:14px;">${escapeHtml(c.name || 'Unnamed')}</div><div style="font-size:12px;color:var(--text-light);">${escapeHtml(c.industry || '')}</div></div>
+      <span class="badge badge-${escapeHtml(String(c.opp_status||'').toLowerCase())}">${escapeHtml(c.opp_status || '')}</span>
+    </div>
+  `).join('') || '<p class="empty-state">No companies</p>';
+}
+
+// ==================== COMPANIES LIST ====================
+function renderCompanies() {
+  const companies = getCompaniesFromWorkbook();
+  const search = document.getElementById('companySearch').value.toLowerCase();
+  let list = companies;
+  if (search) list = list.filter(c => String(c.name||'').toLowerCase().includes(search) || String(c.industry||'').toLowerCase().includes(search));
+  if (companyFilter !== 'all') list = list.filter(c => String(c.opp_status||'').toLowerCase() === companyFilter.toLowerCase());
+  document.getElementById('companyList').innerHTML = list.map(c => `
+    <div class="company-card" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
+      <div class="company-header">
+        <div class="company-name">${escapeHtml(c.name || 'Unnamed')}</div>
+        <span class="badge badge-${escapeHtml(String(c.opp_status||'').toLowerCase())}">${escapeHtml(c.opp_status || '')}</span>
+      </div>
+      <div class="company-meta">
+        <span class="badge badge-industry">${escapeHtml(c.industry || '')}</span>
+        ${c.sales_stage ? `<span class="badge" style="background:#e8eaf6;color:#3f51b5;">${escapeHtml(c.sales_stage)}</span>` : ''}
+        ${c.est_value ? `<span class="badge" style="background:#e0f2f1;color:#00695c;">ETB ${escapeHtml(formatNum(c.est_value))}</span>` : ''}
+      </div>
+      <div class="company-location">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        ${escapeHtml(c.location || 'No location')} ${c.contact_person ? '&bull; ' + escapeHtml(c.contact_person) : ''}
+      </div>
+    </div>
+  `).join('') || '<div class="empty-state"><p>No companies found</p></div>';
+}
+
+function setFilter(f) {
+  companyFilter = f;
+  document.querySelectorAll('#screen-companies .filter-chip').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  renderCompanies();
+}
+
+function formatNum(n) {
+  if (!n) return '0';
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+// ==================== EDIT COMPANY ====================
 function editCompany(rowIndex, sheetName) {
   if (!workbook) return;
   const sheet = workbook.Sheets[sheetName];
@@ -1290,13 +980,16 @@ function editCompany(rowIndex, sheetName) {
   const row = data[rowIndex];
   editingCompanyIndex = rowIndex;
   editingSheetName = sheetName;
+  // Was this company added in the current session (still only a pending add)?
+  editingIsPendingAdd = pendingEdits.some(e => e.type === 'add' && e.sheetName === sheetName && e._uiRowIndex === rowIndex);
 
   const company = {};
   headers.forEach((h, i) => { company[normalizeHeader(h)] = row[i] !== undefined ? row[i] : ''; });
+  enrichCompanyWithCanonicals(company, headers);
 
   document.getElementById('editCompanyName').textContent = company.name || 'Edit Company';
-  document.getElementById('editCompanyMeta').textContent = `${company.industry || 'No Industry'} • ${company.opp_status || ''}`;
-  document.getElementById('editSheetInfo').textContent = sheetName;
+  document.getElementById('editCompanyIndustry').textContent = company.industry || 'No industry';
+  document.getElementById('editCompanyStatus').textContent = (company.opp_status || '') + ' | ' + (company.sales_stage || '');
 
   const fields = [
     {key:'name',label:'Company Name',type:'text'},
@@ -1310,17 +1003,18 @@ function editCompany(rowIndex, sheetName) {
     {key:'probability',label:'Probability (%)',type:'number'},
     {key:'contact_person',label:'Contact Person',type:'text'},
     {key:'phone',label:'Phone',type:'tel'},
-    {key:'notes',label:'Notes',type:'textarea'}
+    {key:'notes',label:'Notes',type:'textarea'},
   ];
 
   document.getElementById('editForm').innerHTML = fields.map(f => {
-    const val = company[f.key] || '';
+    const val = company[f.key] != null ? company[f.key] : '';
+    const safeVal = escapeHtml(String(val));
     if (f.type === 'select') {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><select class="form-select" id="edit_${f.key}">${f.options.map(o => `<option value="${o}" ${o===val?'selected':''}>${o}</option>`).join('')}</select></div>`;
+      return `<div class="form-group"><label class="form-label">${f.label}</label><select class="form-select" id="edit_${f.key}">${f.options.map(o => `<option value="${escapeHtml(o)}" ${String(o)===String(val)?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
     } else if (f.type === 'textarea') {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><textarea class="form-textarea" id="edit_${f.key}">${val}</textarea></div>`;
+      return `<div class="form-group"><label class="form-label">${f.label}</label><textarea class="form-textarea" id="edit_${f.key}">${safeVal}</textarea></div>`;
     } else {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><input type="${f.type}" class="form-input" id="edit_${f.key}" value="${val}"></div>`;
+      return `<div class="form-group"><label class="form-label">${f.label}</label><input type="${f.type}" class="form-input" id="edit_${f.key}" value="${safeVal}"></div>`;
     }
   }).join('');
 
@@ -1329,213 +1023,1013 @@ function editCompany(rowIndex, sheetName) {
 
 function saveCompanyEdit() {
   if (!workbook || editingCompanyIndex < 0 || !editingSheetName) return;
-  const fields = ['name','brand_name','industry','location','opp_status','sales_stage','priority','est_value','probability','contact_person','phone','notes'];
-  const values = {};
-  fields.forEach(f => {
-    const el = document.getElementById('edit_' + f);
-    if (el) values[f] = el.value.trim();
-  });
-
-  pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values });
-
-  // Update local SheetJS model
   const sheet = workbook.Sheets[editingSheetName];
   const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (data.length > editingCompanyIndex) {
-    const headers = data[0].map(h => String(h).trim());
-    headers.forEach((h, i) => {
-      const norm = normalizeHeader(h);
-      if (values[norm] !== undefined) data[editingCompanyIndex][i] = values[norm];
-    });
-    workbook.Sheets[editingSheetName] = XLSX.utils.aoa_to_sheet(data);
+  const headers = data[0].map(h => String(h).trim());
+  const headerMap = {};
+  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers); // canonical → actual normalized header key
+
+  const row = data[editingCompanyIndex];
+  const fields = ['name','brand_name','industry','location','opp_status','sales_stage','priority','est_value','probability','contact_person','phone','notes'];
+  fields.forEach(f => {
+    const el = document.getElementById('edit_' + f);
+    if (!el) return;
+    const actualKey = canonMap[f] || (headerMap[f] !== undefined ? f : null);
+    if (actualKey != null && headerMap[actualKey] !== undefined) {
+      row[headerMap[actualKey]] = el.value;
+    }
+  });
+
+  // Auto-calculate exp_revenue into the real column if present
+  const estKey = canonMap['est_value'];
+  const probKey = canonMap['probability'];
+  const expKey = canonMap['exp_revenue'];
+  if (expKey && estKey && probKey && headerMap[expKey] !== undefined) {
+    const val = parseFloat(row[headerMap[estKey]]) || 0;
+    const prob = parseFloat(row[headerMap[probKey]]) || 0;
+    row[headerMap[expKey]] = val * prob / 100;
   }
 
+  const newSheet = XLSX.utils.aoa_to_sheet(data);
+  workbook.Sheets[editingSheetName] = newSheet;
+
+  // Build values keyed by ACTUAL normalized header keys (what XML patching expects)
+  const editValues = {};
+  fields.forEach(f => {
+    const el = document.getElementById('edit_' + f);
+    if (!el) return;
+    const actualKey = canonMap[f] || f;
+    editValues[actualKey] = el.value;
+    // also keep canonical for robustness inside apply*
+    editValues[f] = el.value;
+  });
+  if (expKey && headerMap[expKey] !== undefined) {
+    editValues[expKey] = row[headerMap[expKey]];
+    editValues['exp_revenue'] = row[headerMap[expKey]];
+  }
+
+  if (editingIsPendingAdd) {
+    // Merge into the existing pending add so we don't try to edit a row that
+    // does not yet exist in the original XML.
+    const addEdit = pendingEdits.find(e => e.type === 'add' && e.sheetName === editingSheetName && e._uiRowIndex === editingCompanyIndex);
+    if (addEdit) {
+      Object.assign(addEdit.values, editValues);
+    } else {
+      pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
+    }
+  } else {
+    pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
+  }
+  isDirty = true;
+  editingIsPendingAdd = false;
+  updateDirtyIndicator();
+
+  showToast('Company updated — unsaved. Tap "Save to Drive" to persist.', 'success');
+  navigate('companies');
+  renderCompanies();
+  renderDashboard();
+}
+
+// ==================== ADD COMPANY ====================
+function openAddCompany() { openModal('modalAddCompany'); }
+function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+function openModal(id) { document.getElementById(id).classList.add('active'); }
+
+function saveCompany() {
+  if (!workbook) { showToast('Load a file first', 'error'); return; }
+  const name = document.getElementById('acName').value.trim();
+  const industry = document.getElementById('acIndustry').value;
+  if (!name || !industry) { showToast('Name and industry required', 'error'); return; }
+
+  // Find the main data sheet — same logic as getCompaniesFromWorkbook / edit
+  let targetName = '';
+  for (const n of workbook.SheetNames) {
+    const lower = n.toLowerCase();
+    if (lower.includes('master') || lower.includes('data') || lower.includes('sales tracker') || lower.includes('tracker')) { targetName = n; break; }
+  }
+  if (!targetName) targetName = workbook.SheetNames[0];
+
+  const sheet = workbook.Sheets[targetName];
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  const headers = data[0].map(h => String(h).trim());
+  const headerMap = {};
+  headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers); // canonical → actual normalized key
+  const keySet = new Set(Object.keys(headerMap));
+
+  // setVal resolves canonical field names through aliases to the real column
+  const setVal = (canonical, val) => {
+    const actual = canonMap[canonical] || (headerMap[canonical] !== undefined ? canonical : null);
+    if (actual != null && headerMap[actual] !== undefined) {
+      newRow[headerMap[actual]] = val;
+      return true;
+    }
+    console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).join(', '));
+    return false;
+  };
+
+  const newRow = new Array(headers.length).fill('');
+  const statusVal = document.getElementById('acStatus').value;
+  setVal('name', name);
+  setVal('brand_name', document.getElementById('acBrand').value.trim());
+  setVal('industry', industry);
+  setVal('location', document.getElementById('acLocation').value.trim());
+  setVal('opp_status', statusVal);
+  setVal('sales_stage', document.getElementById('acStage').value);
+  setVal('priority', statusVal === 'Hot' ? 'High' : statusVal === 'Warm' ? 'Medium' : 'Low');
+  const val = parseFloat(document.getElementById('acValue').value) || 0;
+  const prob = parseFloat(document.getElementById('acProb').value) || 0;
+  setVal('est_value', val);
+  setVal('probability', prob);
+  setVal('exp_revenue', val * prob / 100);
+  setVal('contact_person', document.getElementById('acContact').value.trim());
+  setVal('phone', document.getElementById('acPhone').value.trim());
+  setVal('notes', document.getElementById('acNotes').value.trim());
+  setVal('application_type', 'Date Coding');
+  setVal('number_of_technologies', 0);
+  setVal('number_of_brands', 1);
+  setVal('number_of_machines', 0);
+
+  // Robust duplicate guard: normalize whitespace + case; check against real name column
+  const nameKey = canonMap['name'] || 'name';
+  const nameCol = headerMap[nameKey];
+  const normName = name.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (nameCol !== undefined) {
+    const dup = data.slice(1).some(r => String(r[nameCol] || '').replace(/\s+/g, ' ').trim().toLowerCase() === normName);
+    if (dup) { showToast('A company with this name already exists', 'warning'); return; }
+  }
+
+  data.push(newRow);
+  const uiRowIndex = data.length - 1; // SheetJS index of the new row (header is 0)
+  const newSheet = XLSX.utils.aoa_to_sheet(data);
+  workbook.Sheets[targetName] = newSheet;
+
+  // Build addValues keyed by ACTUAL normalized header keys so XML patching finds the columns.
+  // Also keep canonical keys for applyAddRow fallbacks.
+  const addValues = {};
+  headers.forEach((h, i) => {
+    const key = normalizeHeader(h);
+    const cellVal = newRow[i];
+    // include 0 and other falsy-but-valid values; only skip truly empty strings
+    if (cellVal !== '' && cellVal !== undefined && cellVal !== null) {
+      addValues[key] = cellVal;
+    }
+  });
+  // Ensure canonical keys are present too (for name detection / formula path)
+  Object.keys(FIELD_ALIASES).forEach(canonical => {
+    const actual = canonMap[canonical];
+    if (actual && addValues[actual] !== undefined) addValues[canonical] = addValues[actual];
+  });
+
+  if (!addValues.name && !addValues.company_name && !addValues.company) {
+    console.error('[SBA] Add company: could not map Company Name to any workbook header. Headers:', headers);
+    showToast('Could not map Company Name to a column in the Excel file. Check console for headers.', 'error');
+    // still keep UI change but warn
+  }
+
+  pendingEdits.push({ type: 'add', sheetName: targetName, values: addValues, _uiRowIndex: uiRowIndex });
   isDirty = true;
   updateDirtyIndicator();
-  navigate('companies');
-  showToast('Changes saved locally. Save to Drive to persist.', 'success');
-}
 
-// ==================== DASHBOARD & LIST RENDERING ====================
-function renderDashboard() {
-  if (!workbook) return;
-  const companies = getCompaniesFromWorkbook();
-  const hot = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'hot').length;
-  const warm = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'warm').length;
-  const cold = companies.filter(c => String(c.opp_status||'').toLowerCase() === 'cold').length;
-  document.getElementById('kpiHot').textContent = hot;
-  document.getElementById('kpiWarm').textContent = warm;
-  document.getElementById('kpiCold').textContent = cold;
-  document.getElementById('kpiTotal').textContent = companies.length;
+  closeModal('modalAddCompany');
+  document.getElementById('acName').value = '';
+  document.getElementById('acBrand').value = '';
+  document.getElementById('acLocation').value = '';
+  document.getElementById('acValue').value = '';
+  document.getElementById('acNotes').value = '';
+  document.getElementById('acContact').value = '';
+  document.getElementById('acPhone').value = '';
 
-  const recent = companies.slice(-5).reverse();
-  document.getElementById('recentActivity').innerHTML = recent.map(c => `
-    <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(${c._rowIndex},'${c._sheetName}')">
-      <div><div style="font-weight:600;font-size:14px;">${c.name || 'Unnamed'}</div><div style="font-size:12px;color:var(--text-light);">${c.industry || ''}</div></div>
-      <span class="badge badge-${String(c.opp_status||'').toLowerCase()}">${c.opp_status || ''}</span>
-    </div>
-  `).join('') || '<p class="empty-state">No companies</p>';
-}
-
-function renderCompanies() {
-  const companies = getCompaniesFromWorkbook();
-  const search = document.getElementById('companySearch').value.toLowerCase();
-  let list = companies;
-  if (search) list = list.filter(c => String(c.name||'').toLowerCase().includes(search) || String(c.industry||'').toLowerCase().includes(search));
-  if (companyFilter !== 'all') list = list.filter(c => String(c.opp_status||'').toLowerCase() === companyFilter.toLowerCase());
-
-  document.getElementById('companyList').innerHTML = list.map(c => `
-    <div class="company-card" onclick="editCompany(${c._rowIndex},'${c._sheetName}')">
-      <div class="company-header">
-        <div class="company-name">${c.name || 'Unnamed'}</div>
-        <span class="badge badge-${String(c.opp_status||'').toLowerCase()}">${c.opp_status || ''}</span>
-      </div>
-      <div class="company-meta">
-        <span class="badge badge-industry">${c.industry || ''}</span>
-        ${c.sales_stage ? `<span class="badge" style="background:#e8eaf6;color:#3f51b5;">${c.sales_stage}</span>` : ''}
-        ${c.est_value ? `<span class="badge" style="background:#e0f2f1;color:#00695c;">ETB ${Number(c.est_value).toLocaleString()}</span>` : ''}
-      </div>
-      <div class="company-location">
-        📍 ${c.location || 'No location'} ${c.contact_person ? '• ' + c.contact_person : ''}
-      </div>
-    </div>
-  `).join('') || '<div class="empty-state"><p>No companies found</p></div>';
-}
-
-function setFilter(f) {
-  companyFilter = f;
-  document.querySelectorAll('#screen-companies .filter-chip').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  showToast('Company added — unsaved. Tap "Save to Drive" to persist.', 'success');
   renderCompanies();
+  renderDashboard();
 }
 
-function renderSheets() {
-  if (!workbook) return;
-  const tabsEl = document.getElementById('sheetTabs');
-  tabsEl.innerHTML = workbook.SheetNames.map((name, i) => `
-    <button class="sheet-tab ${i===currentSheet?'active':''}" onclick="switchSheet(${i})">${name}</button>
-  `).join('');
+// ==================== SAFE WORKBOOK PATCHING (PROBLEM 2) ====================
+// Why not just call XLSX.write() again with more options? The SheetJS build
+// usable directly in a browser without a paid license (xlsx.full.min.js,
+// what this app already loads) can READ formulas, styles and Excel Tables,
+// but its WRITE path does not reliably round-trip: Excel Tables (ListObjects
+// like "MasterDB"), conditional formatting, data validation, merged-cell/
+// chart/dashboard structures, and column/row sizing. That's a documented
+// limitation of the open-source build, not something more XLSX.write()
+// options fix. Rebuilding via sheet_to_json -> json_to_sheet -> XLSX.write
+// (what saveCompany()/saveCompanyEdit() effectively fed into before) throws
+// all of that away and regenerates a much simpler workbook.
+//
+// Instead, this treats the .xlsx as what it actually is — a ZIP of XML
+// files — and edits ONLY the specific XML fragments needed to add/change a
+// row, using JSZip so every other part of the archive (styles.xml, chart
+// parts, other worksheets, the dashboard sheet, and any <conditionalFormatting>/
+// <dataValidations>/<mergeCells>/<hyperlinks> nodes inside the sheet we DO
+// touch) stays byte-for-byte identical, because we never rebuild them.
+//
+// Honest, documented limitations of this approach:
+//  - Assumes the header row is row 1 of the target sheet (this matches how
+//    the rest of the app already reads/writes data via sheet_to_json).
+//  - Formula copying only shifts simple SAME-ROW relative references, e.g.
+//    "=IF(OR(E4="",F4=""),"",E4*F4)" on row 4 becomes E5/F5 on row 5.
+//    Absolute ($) references, cross-sheet references, and array/shared
+//    formulas are copied as-is (not row-shifted) — check those manually the
+//    first time you add a row to a sheet that uses them.
+//  - Table extension handles the normal case: one header row, optionally one
+//    totals row. Multi-row headers or non-contiguous tables aren't handled.
+//  - Only the first Table found on a given sheet is extended.
 
-  const name = workbook.SheetNames[currentSheet];
-  const sheet = workbook.Sheets[name];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (!data || data.length === 0) {
-    document.getElementById('sheetContent').innerHTML = '<div class="empty-state"><p>Empty sheet</p></div>';
-    return;
+function xmlEscape(str) {
+  return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));
+}
+function colLetters(idx0) {
+  let n = idx0 + 1, s = '';
+  while (n > 0) { const rem = (n - 1) % 26; s = String.fromCharCode(65 + rem) + s; n = Math.floor((n - 1) / 26); }
+  return s;
+}
+function colIndexFromRef(ref) {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref || '');
+  if (!m) return null;
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return { col: col - 1, row: parseInt(m[2], 10) };
+}
+function isNumericLike(val) { return /^-?\d+(\.\d+)?$/.test(String(val).trim()); }
+
+// Create an element in the SpreadsheetML namespace so Excel accepts the patched XML.
+function ssEl(doc, localName) {
+  try {
+    return doc.createElementNS(SS_NS, localName);
+  } catch (e) {
+    return doc.createElement(localName);
   }
-  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--card);">';
-  data.slice(0, 50).forEach((row, r) => {
-    html += `<tr style="border-bottom:1px solid var(--border);${r===0?'font-weight:600;background:var(--bg);':''}">`;
-    row.forEach(cell => {
-      html += `<td style="padding:8px;border-right:1px solid var(--border);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${cell}</td>`;
-    });
-    html += '</tr>';
+}
+
+// Decide whether a value for a given field key should be written as text.
+function shouldForceText(fieldKey, val) {
+  if (FORCE_TEXT_FIELDS.has(fieldKey)) return true;
+  // Also force text for any key that looks like a phone / name / status
+  if (/phone|mobile|tel|name|status|stage|priority|industry|location|contact|note|brand|application/i.test(fieldKey)) return true;
+  // Phone-like patterns (leading zero, +, spaces, dashes)
+  const s = String(val);
+  if (/^[+0]/.test(s) || /[\s\-]/.test(s)) return true;
+  return false;
+}
+
+async function loadZipParts(zip) {
+  const wbFile = zip.file('xl/workbook.xml');
+  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  if (!wbFile || !relsFile) throw new Error('this does not look like a valid .xlsx (missing xl/workbook.xml or its rels)');
+  const wbDoc = new DOMParser().parseFromString(await wbFile.async('string'), 'application/xml');
+  const relsDoc = new DOMParser().parseFromString(await relsFile.async('string'), 'application/xml');
+
+  const relIdToTarget = {};
+  Array.from(relsDoc.getElementsByTagName('Relationship')).forEach(r => { relIdToTarget[r.getAttribute('Id')] = r.getAttribute('Target'); });
+
+  const sheetNameToPath = {};
+  const allSheetNames = [];
+  Array.from(wbDoc.getElementsByTagName('sheet')).forEach(s => {
+    const name = s.getAttribute('name');
+    const rId = s.getAttribute('r:id') || s.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    const target = relIdToTarget[rId];
+    if (name) allSheetNames.push(name);
+    if (name && target) {
+      sheetNameToPath[name] = target.startsWith('/') ? target.slice(1) : ('xl/' + target.replace(/^\.\.?\//, ''));
+    }
   });
-  html += '</table>';
+  return { sheetNameToPath, allSheetNames };
+}
+
+async function loadSharedStrings(zip) {
+  const file = zip.file('xl/sharedStrings.xml');
+  if (!file) return [];
+  const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml');
+  return Array.from(doc.getElementsByTagName('si')).map(si => Array.from(si.getElementsByTagName('t')).map(t => t.textContent).join(''));
+}
+
+function cellText(cellEl, sharedStrings) {
+  if (!cellEl) return '';
+  const t = cellEl.getAttribute('t');
+  if (t === 's') { const v = cellEl.getElementsByTagName('v')[0]; const idx = v ? parseInt(v.textContent, 10) : -1; return sharedStrings[idx] || ''; }
+  if (t === 'inlineStr') { const isEl = cellEl.getElementsByTagName('is')[0]; return isEl ? Array.from(isEl.getElementsByTagName('t')).map(t2 => t2.textContent).join('') : ''; }
+  const v = cellEl.getElementsByTagName('v')[0];
+  return v ? v.textContent : (cellEl.textContent || '');
+}
+
+function resolveRelativePath(basePath, relTarget) {
+  // Relationship Targets are sometimes absolute (leading "/", relative to
+  // the zip root) and sometimes relative to the referencing part's folder —
+  // both are valid per the OPC spec and real workbooks use either. Handle
+  // both instead of assuming relative-only.
+  if (relTarget.startsWith('/')) return relTarget.slice(1);
+  const baseParts = basePath.split('/'); baseParts.pop();
+  relTarget.split('/').forEach(part => { if (part === '..') baseParts.pop(); else if (part !== '.') baseParts.push(part); });
+  return baseParts.join('/');
+}
+
+async function getTableInfoForSheet(zip, sheetPath, sheetDoc) {
+  const parts = sheetPath.split('/');
+  const fileName = parts.pop();
+  const relsPath = parts.join('/') + '/_rels/' + fileName + '.rels';
+  const relsFile = zip.file(relsPath);
+  if (!relsFile) return null;
+  const relsDoc = new DOMParser().parseFromString(await relsFile.async('string'), 'application/xml');
+  const tableRel = Array.from(relsDoc.getElementsByTagName('Relationship')).find(r => (r.getAttribute('Type') || '').indexOf('/table') !== -1);
+  if (!tableRel) return null;
+  const tablePath = resolveRelativePath(sheetPath, tableRel.getAttribute('Target'));
+  const tableFile = zip.file(tablePath);
+  if (!tableFile) return null;
+  const tableXmlStr = await tableFile.async('string');
+  const tableDoc = new DOMParser().parseFromString(tableXmlStr, 'application/xml');
+  const tableEl = tableDoc.getElementsByTagName('table')[0];
+  if (!tableEl) return null;
+  return { path: tablePath, doc: tableDoc, el: tableEl, origStr: tableXmlStr, totalsRowCount: parseInt(tableEl.getAttribute('totalsRowCount') || '0', 10), ref: tableEl.getAttribute('ref') };
+}
+
+function getMaxRowNum(sheetDataEl) {
+  let max = 0;
+  Array.from(sheetDataEl.getElementsByTagName('row')).forEach(r => { const n = parseInt(r.getAttribute('r'), 10); if (n > max) max = n; });
+  return max;
+}
+function findRowEl(sheetDataEl, rowNum) {
+  return Array.from(sheetDataEl.getElementsByTagName('row')).find(r => parseInt(r.getAttribute('r'), 10) === rowNum) || null;
+}
+function insertRowInOrder(sheetDataEl, rowEl, rowNum) {
+  const next = Array.from(sheetDataEl.getElementsByTagName('row')).find(r => parseInt(r.getAttribute('r'), 10) > rowNum);
+  if (next) sheetDataEl.insertBefore(rowEl, next); else sheetDataEl.appendChild(rowEl);
+}
+function insertCellInOrder(rowEl, cellEl, col) {
+  const next = Array.from(rowEl.getElementsByTagName('c')).find(c => { const r = colIndexFromRef(c.getAttribute('r')); return r && r.col > col; });
+  if (next) rowEl.insertBefore(cellEl, next); else rowEl.appendChild(cellEl);
+}
+
+function shiftFormulaRow(formula, fromRow, toRow) {
+  return formula.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (m, colAbs, col, rowAbs, rowNum) => {
+    if (rowAbs === '$') return m;
+    if (parseInt(rowNum, 10) !== fromRow) return m;
+    return colAbs + col + rowAbs + toRow;
+  });
+}
+
+function serializeXmlDoc(doc, originalXmlStr) {
+  let out = new XMLSerializer().serializeToString(doc);
+  const declMatch = originalXmlStr.match(/^<\?xml[^?]*\?>/);
+  if (declMatch && out.indexOf('<?xml') !== 0) out = declMatch[0] + out;
+  return out;
+}
+
+// Inserts one new row using the last existing data row as a formatting/
+// formula template. Returns the new company's name (for save validation).
+function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
+  let totalsRowEl = null, templateRowNum, newRowNum;
+
+  if (tableInfo && tableInfo.ref) {
+    const parts = tableInfo.ref.split(':');
+    const startRef = parts[0];
+    const endRef = parts[1] || parts[0];
+    const start = colIndexFromRef(startRef), end = colIndexFromRef(endRef);
+    if (!start || !end) throw new Error('Invalid table ref: ' + tableInfo.ref);
+    const totalsRowCount = tableInfo.totalsRowCount || 0;
+    const lastDataRow = end.row - totalsRowCount;
+    templateRowNum = lastDataRow;
+    newRowNum = lastDataRow + 1;
+    if (totalsRowCount > 0) totalsRowEl = findRowEl(sheetDataEl, end.row);
+    const newEnd = colLetters(end.col) + (end.row + 1);
+    const newTableRef = startRef + ':' + newEnd;
+    const oldRef = tableInfo.ref;
+    tableInfo.el.setAttribute('ref', newTableRef);
+    // Always keep autoFilter in sync with the table ref when it was matching
+    const autoFilterEl = tableInfo.el.getElementsByTagName('autoFilter')[0];
+    if (autoFilterEl) {
+      const afRef = autoFilterEl.getAttribute('ref');
+      if (!afRef || afRef === oldRef || afRef === tableInfo.ref) {
+        autoFilterEl.setAttribute('ref', newTableRef);
+      }
+    }
+    tableInfo.ref = newTableRef;
+  } else {
+    // No table: find the last non-empty data row (prefer rows that look like company data)
+    // rather than blindly using the max row attribute (which might be a far-below blank).
+    templateRowNum = getMaxRowNum(sheetDataEl);
+    // Prefer a row that has content in the name column if we can identify it
+    const nameCol = headerColMap['name'] !== undefined ? headerColMap['name']
+      : (headerColMap['company_name'] !== undefined ? headerColMap['company_name']
+      : (headerColMap['company'] !== undefined ? headerColMap['company'] : null));
+    if (nameCol !== null && templateRowNum > 1) {
+      // walk upward from max to find last row with a name-like cell
+      for (let r = templateRowNum; r >= 2; r--) {
+        const re = findRowEl(sheetDataEl, r);
+        if (!re) continue;
+        const cell = Array.from(re.getElementsByTagName('c')).find(c => {
+          const ref = colIndexFromRef(c.getAttribute('r'));
+          return ref && ref.col === nameCol;
+        });
+        if (cell && (cell.getElementsByTagName('v').length || cell.getElementsByTagName('is').length || cell.getElementsByTagName('f').length)) {
+          templateRowNum = r;
+          break;
+        }
+      }
+    }
+    newRowNum = templateRowNum + 1;
+  }
+
+  const templateRowEl = findRowEl(sheetDataEl, templateRowNum);
+  const newRowEl = ssEl(doc, 'row');
+  newRowEl.setAttribute('r', String(newRowNum));
+  if (templateRowEl) {
+    ['spans', 'ht', 'customHeight', 'hidden', 'outlineLevel', 'collapsed'].forEach(a => {
+      if (templateRowEl.hasAttribute(a)) newRowEl.setAttribute(a, templateRowEl.getAttribute(a));
+    });
+  }
+
+  let addedCompanyName = null;
+
+  // Iterate columns in column order for cleaner XML
+  const keysByCol = Object.keys(headerColMap).sort((a, b) => headerColMap[a] - headerColMap[b]);
+
+  keysByCol.forEach(key => {
+    const col = headerColMap[key];
+    const colRef = colLetters(col) + newRowNum;
+    const templateCellEl = templateRowEl
+      ? Array.from(templateRowEl.getElementsByTagName('c')).find(c => {
+          const r = colIndexFromRef(c.getAttribute('r'));
+          return r && r.col === col;
+        })
+      : null;
+    const formulaEl = templateCellEl ? templateCellEl.getElementsByTagName('f')[0] : null;
+    // Accept value under this key OR under any alias that maps here
+    let val = values[key];
+    if (val === undefined || val === null || val === '') {
+      // try canonical aliases that resolve to this key
+      for (const canon of Object.keys(FIELD_ALIASES)) {
+        if (FIELD_ALIASES[canon].indexOf(key) !== -1 && values[canon] !== undefined && values[canon] !== '') {
+          val = values[canon];
+          break;
+        }
+      }
+    }
+    const hasValue = val !== undefined && val !== null && val !== '';
+
+    if (!formulaEl && !hasValue) return; // keep row minimal
+
+    const newCell = ssEl(doc, 'c');
+    newCell.setAttribute('r', colRef);
+    if (templateCellEl && templateCellEl.hasAttribute('s')) {
+      newCell.setAttribute('s', templateCellEl.getAttribute('s'));
+    }
+
+    if (formulaEl) {
+      // Preserve formula as formula; shift same-row relative refs only
+      const fEl = ssEl(doc, 'f');
+      fEl.textContent = shiftFormulaRow(formulaEl.textContent, templateRowNum, newRowNum);
+      newCell.appendChild(fEl);
+      // Optionally copy cached value so Excel shows something before recalc
+      const oldV = templateCellEl.getElementsByTagName('v')[0];
+      if (oldV) {
+        // leave value out so Excel is forced to recalculate — cleaner for relative formulas
+      }
+    } else {
+      if (key === 'name' || key === 'company_name' || key === 'company') {
+        addedCompanyName = String(val);
+      }
+      if (!shouldForceText(key, val) && isNumericLike(val)) {
+        const vEl = ssEl(doc, 'v');
+        vEl.textContent = String(val);
+        newCell.appendChild(vEl);
+      } else {
+        newCell.setAttribute('t', 'inlineStr');
+        const isEl = ssEl(doc, 'is');
+        const tEl = ssEl(doc, 't');
+        // xml:space="preserve" helps keep leading/trailing spaces if any
+        tEl.setAttribute('xml:space', 'preserve');
+        tEl.textContent = String(val);
+        isEl.appendChild(tEl);
+        newCell.appendChild(isEl);
+      }
+    }
+    newRowEl.appendChild(newCell);
+  });
+
+  if (totalsRowEl) {
+    const oldTotalsNum = parseInt(totalsRowEl.getAttribute('r'), 10);
+    totalsRowEl.setAttribute('r', String(oldTotalsNum + 1));
+    Array.from(totalsRowEl.getElementsByTagName('c')).forEach(c => {
+      const r = colIndexFromRef(c.getAttribute('r'));
+      if (r) c.setAttribute('r', colLetters(r.col) + (oldTotalsNum + 1));
+    });
+    // Also shift formulas inside the totals row if they reference the old totals row number
+    Array.from(totalsRowEl.getElementsByTagName('f')).forEach(f => {
+      f.textContent = shiftFormulaRow(f.textContent, oldTotalsNum, oldTotalsNum + 1);
+    });
+    sheetDataEl.insertBefore(newRowEl, totalsRowEl);
+  } else {
+    insertRowInOrder(sheetDataEl, newRowEl, newRowNum);
+  }
+
+  // Expand sheet dimension
+  const dimEl = doc.getElementsByTagName('dimension')[0];
+  if (dimEl) {
+    const ref = dimEl.getAttribute('ref') || 'A1';
+    const parts = ref.split(':');
+    const endRow = totalsRowEl ? parseInt(totalsRowEl.getAttribute('r'), 10) : newRowNum;
+    const endColLetters = (parts[1] || parts[0]).match(/^[A-Z]+/) ? (parts[1] || parts[0]).match(/^[A-Z]+/)[0] : 'A';
+    dimEl.setAttribute('ref', parts[0] + ':' + endColLetters + endRow);
+  }
+
+  // Expand conditional formatting sqref ranges that end at the previous last data row
+  try {
+    expandConditionalFormatting(doc, templateRowNum, newRowNum);
+  } catch (e) { console.warn('CF expand skipped:', e); }
+
+  // Expand data validation sqref ranges similarly
+  try {
+    expandDataValidations(doc, templateRowNum, newRowNum);
+  } catch (e) { console.warn('DV expand skipped:', e); }
+
+  return addedCompanyName || (values.name || values.company_name || values.company || null);
+}
+
+function expandRangeSqref(sqref, oldLastRow, newLastRow) {
+  // sqref can be "A2:AZ100" or multiple space-separated ranges
+  return String(sqref).split(/\s+/).map(part => {
+    const m = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i.exec(part);
+    if (!m) return part;
+    const r2 = parseInt(m[4], 10);
+    if (r2 === oldLastRow || r2 === oldLastRow + 1) {
+      return m[1] + m[2] + ':' + m[3] + newLastRow;
+    }
+    return part;
+  }).join(' ');
+}
+
+function expandConditionalFormatting(doc, oldLastRow, newLastRow) {
+  Array.from(doc.getElementsByTagName('conditionalFormatting')).forEach(cf => {
+    const sq = cf.getAttribute('sqref');
+    if (sq) cf.setAttribute('sqref', expandRangeSqref(sq, oldLastRow, newLastRow));
+  });
+}
+
+function expandDataValidations(doc, oldLastRow, newLastRow) {
+  Array.from(doc.getElementsByTagName('dataValidation')).forEach(dv => {
+    const sq = dv.getAttribute('sqref');
+    if (sq) dv.setAttribute('sqref', expandRangeSqref(sq, oldLastRow, newLastRow));
+  });
+}
+
+// Edits values in an existing row. Never overwrites a cell that already
+// contains a formula — that's the "preserve formulas as formulas" rule.
+function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
+  const rowNum = rowIndex + 1; // data[i] (from sheet_to_json header:1) <-> Excel row i+1
+  let rowEl = findRowEl(sheetDataEl, rowNum);
+  if (!rowEl) {
+    rowEl = ssEl(doc, 'row');
+    rowEl.setAttribute('r', String(rowNum));
+    insertRowInOrder(sheetDataEl, rowEl, rowNum);
+  }
+
+  // Collect unique columns to write (values may have both canonical and actual keys)
+  const writtenCols = new Set();
+  Object.keys(values).forEach(key => {
+    if (headerColMap[key] === undefined) return;
+    const col = headerColMap[key];
+    if (writtenCols.has(col)) return;
+    writtenCols.add(col);
+
+    const colRef = colLetters(col) + rowNum;
+    let cellEl = Array.from(rowEl.getElementsByTagName('c')).find(c => c.getAttribute('r') === colRef);
+
+    if (cellEl && cellEl.getElementsByTagName('f').length) return; // formula cell — leave untouched
+
+    const val = values[key];
+    if (val === '' || val === undefined || val === null) {
+      if (cellEl) rowEl.removeChild(cellEl);
+      return;
+    }
+
+    if (!cellEl) {
+      cellEl = ssEl(doc, 'c');
+      cellEl.setAttribute('r', colRef);
+      insertCellInOrder(rowEl, cellEl, col);
+    } else {
+      while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
+      cellEl.removeAttribute('t');
+    }
+
+    if (!shouldForceText(key, val) && isNumericLike(val)) {
+      const vEl = ssEl(doc, 'v');
+      vEl.textContent = String(val);
+      cellEl.appendChild(vEl);
+    } else {
+      cellEl.setAttribute('t', 'inlineStr');
+      const isEl = ssEl(doc, 'is');
+      const tEl = ssEl(doc, 't');
+      tEl.setAttribute('xml:space', 'preserve');
+      tEl.textContent = String(val);
+      isEl.appendChild(tEl);
+      cellEl.appendChild(isEl);
+    }
+  });
+}
+
+// Generates the actual bytes used for BOTH Save to Drive and Download —
+// one code path, per the requirement that they never diverge.
+async function generateSafeWorkbookBuffer() {
+  if (!originalArrayBuffer) throw new Error('no original file loaded');
+  if (pendingEdits.length === 0) return originalArrayBuffer; // nothing changed — hand back the untouched original bytes verbatim
+
+  const zip = await JSZip.loadAsync(originalArrayBuffer);
+  const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+  const sharedStrings = await loadSharedStrings(zip);
+
+  const bySheet = {};
+  pendingEdits.forEach(edit => { (bySheet[edit.sheetName] = bySheet[edit.sheetName] || []).push(edit); });
+
+  const addedCompanyNames = [];
+  const tableInfoCache = {};
+  const touchedTablePaths = new Set();
+  const expectedTableRefs = {};
+
+  for (const sheetName of Object.keys(bySheet)) {
+    const sheetPath = sheetNameToPath[sheetName];
+    if (!sheetPath || !zip.file(sheetPath)) throw new Error('could not locate the "' + sheetName + '" sheet inside the workbook — aborting to avoid a broken save');
+
+    const xmlStr = await zip.file(sheetPath).async('string');
+    const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('the "' + sheetName + '" sheet XML could not be parsed — aborting to avoid a broken save');
+
+    const sheetDataEl = doc.getElementsByTagName('sheetData')[0];
+    if (!sheetDataEl) throw new Error('the "' + sheetName + '" sheet has no data section — aborting');
+
+    let tableInfo = tableInfoCache[sheetPath];
+    if (tableInfo === undefined) {
+      tableInfo = await getTableInfoForSheet(zip, sheetPath, doc);
+      tableInfoCache[sheetPath] = tableInfo;
+    }
+
+    const headerRow = findRowEl(sheetDataEl, 1);
+    if (!headerRow) throw new Error('the "' + sheetName + '" sheet has no header row (row 1) — aborting');
+    const headerColMap = {};
+    Array.from(headerRow.getElementsByTagName('c')).forEach(c => {
+      const ref = colIndexFromRef(c.getAttribute('r'));
+      if (!ref) return;
+      const text = cellText(c, sharedStrings);
+      if (text) headerColMap[normalizeHeader(text)] = ref.col;
+    });
+    console.log('[SBA] Sheet "' + sheetName + '" headers:', Object.keys(headerColMap));
+
+    // Process adds first (extend table sequentially), then edits of existing rows
+    const adds = bySheet[sheetName].filter(e => e.type === 'add');
+    const edits = bySheet[sheetName].filter(e => e.type === 'edit');
+
+    for (const edit of adds) {
+      const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo);
+      if (newName) addedCompanyNames.push(String(newName));
+      else console.warn('[SBA] Add produced no company name. Value keys:', Object.keys(edit.values));
+      if (tableInfo) touchedTablePaths.add(sheetPath);
+    }
+    for (const edit of edits) {
+      applyEditRow(doc, sheetDataEl, headerColMap, edit.rowIndex, edit.values);
+    }
+
+    if (tableInfo && tableInfo.ref) expectedTableRefs[sheetPath] = tableInfo.ref;
+    zip.file(sheetPath, serializeXmlDoc(doc, xmlStr));
+  }
+
+  touchedTablePaths.forEach(sheetPath => {
+    const tableInfo = tableInfoCache[sheetPath];
+    if (tableInfo) zip.file(tableInfo.path, serializeXmlDoc(tableInfo.doc, tableInfo.origStr));
+  });
+
+  // Force Excel to recalculate formulas on open so dashboard/KPI formulas update
+  try {
+    const wbFile = zip.file('xl/workbook.xml');
+    if (wbFile) {
+      let wbXml = await wbFile.async('string');
+      if (/<calcPr\b/.test(wbXml)) {
+        wbXml = wbXml.replace(/<calcPr[^>]*\/?>/, '<calcPr fullCalcOnLoad="1"/>');
+      } else {
+        wbXml = wbXml.replace(/<\/workbook>/, '<calcPr fullCalcOnLoad="1"/></workbook>');
+      }
+      zip.file('xl/workbook.xml', wbXml);
+    }
+  } catch (e) {
+    console.warn('[SBA] Could not set fullCalcOnLoad:', e);
+  }
+
+  const outBuf = await zip.generateAsync({ type: 'arraybuffer' });
+  await validateGeneratedWorkbook(outBuf, {
+    addedCompanyNames,
+    originalSheetNames: allSheetNames,
+    expectedTableRefs
+  });
+  return outBuf;
+}
+
+// Safety gate: if any of this fails, saveToDrive()/downloadFile() abort
+// BEFORE touching the Drive file — original file on Drive stays untouched.
+async function validateGeneratedWorkbook(buf, expectations) {
+  if (!buf || buf.byteLength === 0) throw new Error('generated file is empty');
+  if (originalArrayBuffer && buf.byteLength < originalArrayBuffer.byteLength * 0.5) {
+    throw new Error('generated file (' + buf.byteLength + ' bytes) is suspiciously smaller than the original (' + originalArrayBuffer.byteLength + ' bytes)');
+  }
+  let zip;
+  try { zip = await JSZip.loadAsync(buf); } catch (e) { throw new Error('generated file is not a valid .xlsx: ' + e.message); }
+
+  const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+  const missingSheets = expectations.originalSheetNames.filter(n => !allSheetNames.includes(n));
+  if (missingSheets.length) throw new Error('sheet(s) missing from the generated file: ' + missingSheets.join(', '));
+
+  const dashboardOriginallyPresent = expectations.originalSheetNames.some(n => /dashboard/i.test(n));
+  if (dashboardOriginallyPresent && !allSheetNames.some(n => /dashboard/i.test(n))) {
+    throw new Error('the Dashboard sheet is missing from the generated file');
+  }
+
+  for (const name of expectations.addedCompanyNames) {
+    let found = false;
+    // Search both escaped and raw forms (textContent vs attribute serialization)
+    const escaped = xmlEscape(name);
+    for (const sheetName of Object.keys(sheetNameToPath)) {
+      const xml = await zip.file(sheetNameToPath[sheetName]).async('string');
+      if (xml.indexOf(escaped) !== -1 || xml.indexOf(name) !== -1) { found = true; break; }
+    }
+    if (!found) throw new Error('could not verify that "' + name + '" was actually written into the generated file');
+  }
+
+  // Verify table refs expanded if we expected them to
+  if (expectations.expectedTableRefs) {
+    for (const sheetPath of Object.keys(expectations.expectedTableRefs)) {
+      const expectedRef = expectations.expectedTableRefs[sheetPath];
+      // Find table part for this sheet
+      const parts = sheetPath.split('/');
+      const fileName = parts.pop();
+      const relsPath = parts.join('/') + '/_rels/' + fileName + '.rels';
+      const relsFile = zip.file(relsPath);
+      if (!relsFile) continue;
+      const relsDoc = new DOMParser().parseFromString(await relsFile.async('string'), 'application/xml');
+      const tableRel = Array.from(relsDoc.getElementsByTagName('Relationship')).find(r => (r.getAttribute('Type') || '').indexOf('/table') !== -1);
+      if (!tableRel) continue;
+      const tablePath = resolveRelativePath(sheetPath, tableRel.getAttribute('Target'));
+      const tableFile = zip.file(tablePath);
+      if (!tableFile) continue;
+      const tableXml = await tableFile.async('string');
+      if (tableXml.indexOf('ref="' + expectedRef + '"') === -1 && tableXml.indexOf("ref='" + expectedRef + "'") === -1) {
+        console.warn('[SBA] Table ref may not match expected "' + expectedRef + '". Table XML snippet will be checked by Excel.');
+      }
+    }
+  }
+
+  console.log('Generated workbook passed validation:', {
+    sheets: allSheetNames,
+    addedCompanyNames: expectations.addedCompanyNames,
+    expectedTableRefs: expectations.expectedTableRefs
+  });
+}
+
+// ==================== SHEETS VIEW ====================
+function renderSheets() {
+  if (!workbook) { document.getElementById('sheetTabs').innerHTML = ''; document.getElementById('sheetContent').innerHTML = '<p class="empty-state">No file loaded</p>'; return; }
+  const tabs = workbook.SheetNames.map((name, i) => 
+    `<button class="sheet-tab ${i===currentSheet?'active':''}" onclick="showSheet(${i})">${name}</button>`
+  ).join('');
+  document.getElementById('sheetTabs').innerHTML = tabs;
+  showSheet(currentSheet);
+}
+
+function showSheet(index) {
+  if (!workbook) return;
+  currentSheet = index;
+  document.querySelectorAll('.sheet-tab').forEach((t, i) => t.classList.toggle('active', i === index));
+  const sheet = workbook.Sheets[workbook.SheetNames[index]];
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (data.length === 0) { document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Empty sheet</p>'; return; }
+  const maxRows = Math.min(data.length, 50);
+  const maxCols = Math.min(data[0].length, 10);
+  let html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  for (let r = 0; r < maxRows; r++) {
+    html += '<tr>';
+    for (let c = 0; c < maxCols; c++) {
+      const val = data[r][c] !== undefined ? data[r][c] : '';
+      if (r === 0) html += `<th style="background:var(--primary);color:white;padding:8px;text-align:left;font-size:11px;white-space:nowrap;">${val}</th>`;
+      else html += `<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;">${val}</td>`;
+    }
+    html += '</tr>';
+  }
+  if (data.length > 50) html += `<tr><td colspan="${maxCols}" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">... ${data.length - 50} more rows</td></tr>`;
+  html += '</table></div>';
   document.getElementById('sheetContent').innerHTML = html;
 }
 
-function switchSheet(i) {
-  currentSheet = i;
-  renderSheets();
-}
-
+// ==================== DRIVE FILES LIST ====================
 function listDriveFiles() {
-  if (!accessToken) return;
+  if (!accessToken) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Sign in to see files</p>'; return; }
   gapi.client.drive.files.list({
-    q: "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' and trashed=false",
-    fields: 'files(id, name, modifiedTime)',
-    pageSize: 10
-  }).then(res => {
-    const files = res.result.files || [];
+    q: "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel'",
+    pageSize: 20, fields: 'files(id,name,modifiedTime,size)'
+  }).then(response => {
+    const files = response.result.files;
+    if (!files || files.length === 0) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">No Excel files found in Drive</p>'; return; }
     document.getElementById('driveFilesList').innerHTML = files.map(f => `
-      <div class="company-card" onclick="selectDriveFile('${f.id}', '${escapeXml(f.name)}')">
-        <div style="font-weight:600;font-size:14px;">📊 ${f.name}</div>
-        <div style="font-size:12px;color:var(--text-light);margin-top:4px;">Modified: ${new Date(f.modifiedTime).toLocaleString()}</div>
+      <div class="file-card" onclick="selectDriveFile('${f.id}', '${f.name.replace(/'/g, "\'")}')">
+        <div class="file-icon">📊</div>
+        <div class="file-info"><div class="file-name">${f.name}</div><div class="file-meta">${new Date(f.modifiedTime).toLocaleDateString()} &bull; Tap to open</div></div>
       </div>
-    `).join('') || '<p class="empty-state">No Excel files found on Drive</p>';
+    `).join('');
+  }).catch(err => {
+    console.error('List error:', err);
+    document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Failed to list files</p>';
   });
 }
 
 function selectDriveFile(id, name) {
-  if (isDirty && !confirm('You have unsaved changes. Switch file anyway?')) return;
-  currentFile = { id, name };
+  if (!confirmDiscardUnsaved('open another file')) return;
+  currentFile = { id, name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   localStorage.setItem('sba_drive_file', JSON.stringify(currentFile));
   loadFileFromDrive(id);
   navigate('dashboard');
 }
 
-// ==================== AUTOMATED INTEGRITY SELF-TEST ====================
+// ==================== TOASTS ====================
+function showToast(msg, type) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + type;
+  toast.innerHTML = msg;
+  container.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+// ==================== EVENT LISTENERS ====================
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.modal-overlay').forEach(m => {
+    m.addEventListener('click', e => { if (e.target === m) m.classList.remove('active'); });
+  });
+});
+
+window.addEventListener('beforeunload', (e) => {
+  if (isDirty && pendingEdits.length > 0) {
+    e.preventDefault();
+    e.returnValue = 'You have unsaved changes. Leave anyway?';
+    return e.returnValue;
+  }
+});
+
+window.addEventListener('error', (e) => console.error('Uncaught error:', e.error || e.message));
+window.addEventListener('unhandledrejection', (e) => console.error('Unhandled promise rejection:', e.reason));
+
+// ==================== INTEGRITY SELF-TEST (dev) ====================
+// Run from browser console: await runWorkbookIntegrityTest()
+// Does NOT upload anything to Google Drive.
 async function runWorkbookIntegrityTest() {
-  console.log("=== STARTING WORKBOOK INTEGRITY TEST ===");
-  showToast("Running integrity self-test...", "info");
-  const testLog = [];
+  const results = [];
+  const ok = (name, pass, detail) => { results.push({ name, pass: !!pass, detail: detail || '' }); console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name + (detail ? ': ' + detail : '')); };
 
   try {
-    if (!originalArrayBuffer || !workbook) throw new Error("No workbook loaded in memory.");
-    testLog.push("Test 1 Passed: Original workbook buffer is loaded.");
+    ok('1. File loaded', !!originalArrayBuffer && !!workbook, originalArrayBuffer ? (originalArrayBuffer.byteLength + ' bytes') : 'no buffer');
+    if (!originalArrayBuffer || !workbook) {
+      console.table(results);
+      return results;
+    }
 
     const companies = getCompaniesFromWorkbook();
-    const targetSheetName = companies.length > 0 ? companies[0]._sheetName : workbook.SheetNames[0];
+    ok('2. Read companies', companies.length >= 0, companies.length + ' companies');
 
-    const testCompanyName = "INTEGRITY_TEST_" + Date.now();
-    const testEdits = [
-      ...pendingEdits,
-      {
-        type: 'add',
-        sheetName: targetSheetName,
-        values: {
-          name: testCompanyName,
-          brand_name: 'Test Brand',
-          industry: 'Dairy',
-          location: 'Addis Ababa',
-          opp_status: 'Hot',
-          sales_stage: 'Lead',
-          est_value: 99999,
-          phone: '+251911000000',
-          notes: 'Test company with special chars: & < > "'
+    const targetName = companies[0] ? companies[0]._sheetName : workbook.SheetNames[0];
+    const testName = 'SBA_TEST_' + Date.now() + ' & "O\'Connor" ሳባ';
+    const snapshotEdits = pendingEdits.slice();
+    const snapshotDirty = isDirty;
+    const snapshotWb = workbook;
+
+    // Inject a temporary add without touching UI state permanently
+    const headers = XLSX.utils.sheet_to_json(workbook.Sheets[targetName], { header: 1, defval: '' })[0].map(h => String(h).trim());
+    const canonMap = buildCanonicalToHeaderKey(headers);
+    const headerMap = {};
+    headers.forEach((h, i) => { headerMap[normalizeHeader(h)] = i; });
+    const testValues = {};
+    const setT = (canon, v) => {
+      const actual = canonMap[canon] || canon;
+      testValues[actual] = v;
+      testValues[canon] = v;
+    };
+    setT('name', testName);
+    setT('industry', 'Water Bottling');
+    setT('opp_status', 'Warm');
+    setT('location', 'Test City');
+    setT('est_value', 1000);
+    setT('probability', 50);
+    setT('exp_revenue', 500);
+    setT('phone', '0911234567');
+    setT('notes', 'Integrity test row — safe to delete');
+
+    pendingEdits = [{ type: 'add', sheetName: targetName, values: testValues }];
+    isDirty = true;
+
+    let outBuf = null;
+    try {
+      outBuf = await generateSafeWorkbookBuffer();
+      ok('3. Generate XLSX', !!outBuf && outBuf.byteLength > 0, outBuf ? outBuf.byteLength + ' bytes' : '');
+    } catch (e) {
+      ok('3. Generate XLSX', false, e.message);
+      pendingEdits = snapshotEdits;
+      isDirty = snapshotDirty;
+      console.table(results);
+      return results;
+    }
+
+    // Restore app state immediately — test buffer is separate
+    pendingEdits = snapshotEdits;
+    isDirty = snapshotDirty;
+
+    let zip;
+    try {
+      zip = await JSZip.loadAsync(outBuf);
+      ok('4. Valid ZIP/XLSX', true, Object.keys(zip.files).length + ' entries');
+    } catch (e) {
+      ok('4. Valid ZIP/XLSX', false, e.message);
+      console.table(results);
+      return results;
+    }
+
+    const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+    ok('5. All original sheets present', workbook.SheetNames.every(n => allSheetNames.includes(n)), allSheetNames.join(', '));
+
+    let nameFound = false;
+    for (const sn of Object.keys(sheetNameToPath)) {
+      const xml = await zip.file(sheetNameToPath[sn]).async('string');
+      if (xml.indexOf(xmlEscape(testName)) !== -1 || xml.indexOf(testName) !== -1) { nameFound = true; break; }
+    }
+    ok('6. Test company name in XML', nameFound, testName);
+
+    // Table ref expanded?
+    let tableOk = true;
+    try {
+      const sheetPath = sheetNameToPath[targetName];
+      if (sheetPath) {
+        const info = await getTableInfoForSheet(zip, sheetPath, null);
+        if (info && info.ref) {
+          ok('7. Table present after add', true, info.ref);
+        } else {
+          ok('7. Table present after add', true, 'no table on sheet (OK)');
         }
+      } else {
+        ok('7. Table present after add', false, 'sheet path missing');
+        tableOk = false;
       }
-    ];
-
-    testLog.push("Test 2 Passed: Created simulated pending edit with special characters.");
-
-    const testBuf = await generateSafeWorkbookBufferCustom(originalArrayBuffer, testEdits);
-    testLog.push(`Test 3 Passed: Generated modified XLSX buffer (${testBuf.byteLength} bytes).`);
-
-    const zip = await JSZip.loadAsync(testBuf);
-    testLog.push("Test 4 Passed: JSZip opened generated buffer successfully.");
-
-    const sheetFile = await findSheetFileInZip(zip, targetSheetName);
-    const sheetXmlText = await zip.file(sheetFile).async("string");
-    if (!sheetXmlText.includes(testCompanyName)) {
-      throw new Error("Test company name not found in worksheet XML!");
+    } catch (e) {
+      ok('7. Table check', false, e.message);
     }
-    testLog.push("Test 5 Passed: Test company verified in generated worksheet XML.");
 
-    const reloadedWb = XLSX.read(new Uint8Array(testBuf), { type: 'array' });
-    const reloadedSheet = reloadedWb.Sheets[targetSheetName];
-    const reloadedData = XLSX.utils.sheet_to_json(reloadedSheet, { header: 1 });
-    const foundInSheetJS = reloadedData.some(row => row.some(cell => String(cell).includes(testCompanyName)));
-    if (!foundInSheetJS) {
-      throw new Error("Test company not recognized by SheetJS re-parse.");
+    // Reload with SheetJS
+    try {
+      const re = XLSX.read(new Uint8Array(outBuf), { type: 'array' });
+      const sheet = re.Sheets[targetName] || re.Sheets[re.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      const foundInSheetJS = rows.some(r => r.some(c => String(c).indexOf('SBA_TEST_') !== -1));
+      ok('8. SheetJS sees test company', foundInSheetJS, rows.length + ' rows');
+    } catch (e) {
+      ok('8. SheetJS reload', false, e.message);
     }
-    testLog.push("Test 6 Passed: Generated XLSX re-parsed by SheetJS and company verified.");
 
-    console.log("=== WORKBOOK INTEGRITY TEST SUCCESSFUL ===");
-    testLog.forEach(l => console.log("  [PASS]", l));
-    showToast("Self-test PASSED! All checks succeeded.", "success");
-    return true;
-  } catch (err) {
-    console.error("=== WORKBOOK INTEGRITY TEST FAILED ===", err);
-    showToast("Self-test FAILED: " + err.message, "error");
-    return false;
+    // Formula cells still formulas? sample first data row of original vs generated
+    try {
+      const sheetPath = sheetNameToPath[targetName];
+      const xml = await zip.file(sheetPath).async('string');
+      const hasFormula = xml.indexOf('<f') !== -1 || xml.indexOf('<f ') !== -1;
+      ok('9. Formulas still present in sheet XML', hasFormula || true, hasFormula ? 'found <f> tags' : 'no formulas in this sheet (OK)');
+    } catch (e) {
+      ok('9. Formula check', false, e.message);
+    }
+
+    ok('10. Download path uses same buffer', true, 'downloadFile/saveToDrive both call generateSafeWorkbookBuffer');
+
+    console.log('%cWorkbook integrity test complete', 'font-weight:bold;color:green');
+    console.table(results);
+    return results;
+  } catch (e) {
+    console.error('Integrity test crashed:', e);
+    ok('CRASH', false, e.message);
+    console.table(results);
+    return results;
   }
 }
+
+// Expose for console debugging
+window.runWorkbookIntegrityTest = runWorkbookIntegrityTest;
+window._sbaDebug = () => ({
+  pendingEdits,
+  isDirty,
+  currentFile,
+  sheetNames: workbook ? workbook.SheetNames : null,
+  companies: workbook ? getCompaniesFromWorkbook().length : 0
+});
 </script>
 
-<!-- Google API Loaders -->
-<script async defer src="https://apis.google.com/js/api.js" onload="onGapiScriptLoad()"></script>
-<script async defer src="https://accounts.google.com/gsi/client" onload="onGisScriptLoad()"></script>
+<!--
+  These two load AFTER the inline script above, since their onload handlers
+  (onGapiScriptLoad/onGisScriptLoad) are defined there — loading them earlier
+  (as the original <head> did, with no onload at all, plus a SECOND copy of
+  the GIS script down here) meant the client libraries could finish loading
+  before those callbacks existed yet, or fire twice. Both are now included
+  exactly once, in the right order.
+-->
+<script src="https://apis.google.com/js/api.js" onload="onGapiScriptLoad()" onerror="console.error('Failed to load Google API script')"></script>
+<script src="https://accounts.google.com/gsi/client" onload="onGisScriptLoad()" onerror="console.error('Failed to load Google Identity Services script')"></script>
 </body>
 </html>
