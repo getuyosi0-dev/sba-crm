@@ -1334,7 +1334,32 @@ function saveCompany() {
     return;
   }
 
-  pendingEdits.push({ type: 'add', sheetName: targetName, values: addValues, _uiRowIndex: uiRowIndex });
+  // Preferred Excel row = first empty slot after the last *existing* company.
+  // Computed from the row we just appended: its AOA index is the Excel row number.
+  // (data[0] = Excel row 1 header, data[i] = Excel row i+1, so uiRowIndex+1 is the Excel row of the new company)
+  // For tables with trailing blank rows this lands at e.g. 81 after company on 80, not 477.
+  const preferredExcelRow = uiRowIndex + 1;
+  // Sanity: if somehow we appended far below real data, clamp by scanning prior companies
+  let lastExistingExcelRow = headerRowIndex + 1;
+  for (let i = headerRowIndex + 1; i < uiRowIndex; i++) {
+    const nm = nameCol !== undefined ? data[i][nameCol] : data[i][0];
+    if (nm !== undefined && nm !== null && String(nm).trim() !== '') {
+      const low = String(nm).toLowerCase();
+      if (low === 'legend' || low.indexOf('yellow-filled') !== -1 || low.indexOf('priority score') !== -1) continue;
+      lastExistingExcelRow = i + 1;
+    }
+  }
+  // New company should go on the next row after last existing (not after blank padding)
+  const preferredExcelRowClamped = lastExistingExcelRow + 1;
+  console.log('[SBA] Preferred Excel row:', preferredExcelRowClamped, '(last existing company row', lastExistingExcelRow + ', aoa append at', preferredExcelRow + ')');
+
+  pendingEdits.push({
+    type: 'add',
+    sheetName: targetName,
+    values: addValues,
+    _uiRowIndex: uiRowIndex,
+    preferredExcelRow: preferredExcelRowClamped
+  });
   isDirty = true;
   updateDirtyIndicator();
 
@@ -1533,13 +1558,26 @@ function serializeXmlDoc(doc, originalXmlStr) {
 
 // Inserts one new row using the last existing data row as a formatting/
 // formula template. Returns the new company's name (for save validation).
-function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
+function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferredExcelRow) {
   let totalsRowEl = null, templateRowNum, newRowNum;
 
-  // Name column used to find last occupied data row (tables often have hundreds of blank rows)
+  // Name column — only treat a row as occupied if column A (or name col) has a real value text
   const nameColForScan = headerColMap['company'] !== undefined ? headerColMap['company']
     : (headerColMap['name'] !== undefined ? headerColMap['name']
     : (headerColMap['company_name'] !== undefined ? headerColMap['company_name'] : 0));
+
+  function cellHasRealValue(cell) {
+    if (!cell) return false;
+    // Must have a <v> or <is> child with non-empty text (self-closing <c .../> is empty)
+    const v = cell.getElementsByTagName('v')[0];
+    if (v && String(v.textContent || '').trim() !== '') return true;
+    const isEl = cell.getElementsByTagName('is')[0];
+    if (isEl) {
+      const texts = Array.from(isEl.getElementsByTagName('t')).map(t => t.textContent || '').join('');
+      if (String(texts).trim() !== '') return true;
+    }
+    return false;
+  }
 
   function rowHasName(rowNum) {
     const re = findRowEl(sheetDataEl, rowNum);
@@ -1548,11 +1586,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
       const r = colIndexFromRef(c.getAttribute('r'));
       return r && r.col === nameColForScan;
     });
-    if (!cell) return false;
-    // shared string / inline / value
-    if (cell.getElementsByTagName('v').length || cell.getElementsByTagName('is').length) return true;
-    // formula-only empty display still counts as "occupied" structure — treat as empty for insertion
-    return false;
+    return cellHasRealValue(cell);
   }
 
   if (tableInfo && tableInfo.ref) {
@@ -1565,17 +1599,29 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo) {
     const tableLastRow = end.row - totalsRowCount;
     const headerRowNum = start.row;
 
-    // Find last occupied company row inside the table (skip trailing blank reserved rows)
+    // Prefer SheetJS-computed row (last real company + 1) when provided
     let lastOccupied = headerRowNum;
-    for (let r = tableLastRow; r > headerRowNum; r--) {
-      if (rowHasName(r)) { lastOccupied = r; break; }
+    if (preferredExcelRow && preferredExcelRow > headerRowNum + 1) {
+      newRowNum = preferredExcelRow;
+      lastOccupied = preferredExcelRow - 1;
+      // Template = previous real data row (or preferred-1)
+      templateRowNum = lastOccupied > headerRowNum ? lastOccupied : headerRowNum + 1;
+      // Verify template actually has a name; if not, walk up
+      if (!rowHasName(templateRowNum)) {
+        for (let r = Math.min(templateRowNum, tableLastRow); r > headerRowNum; r--) {
+          if (rowHasName(r)) { templateRowNum = r; lastOccupied = r; newRowNum = r + 1; break; }
+        }
+      }
+    } else {
+      // Scan XML for last row with a real company name value (not empty shell cells)
+      for (let r = tableLastRow; r > headerRowNum; r--) {
+        if (rowHasName(r)) { lastOccupied = r; break; }
+      }
+      templateRowNum = lastOccupied > headerRowNum ? lastOccupied : Math.min(headerRowNum + 1, tableLastRow);
+      newRowNum = lastOccupied > headerRowNum ? (lastOccupied + 1) : (headerRowNum + 1);
     }
-    templateRowNum = lastOccupied > headerRowNum ? lastOccupied : Math.min(headerRowNum + 1, tableLastRow);
-    newRowNum = lastOccupied > headerRowNum ? (lastOccupied + 1) : (headerRowNum + 1);
 
-    // If the next row is still inside the current table range, fill that blank row
-    // and do NOT extend the table. Only extend when we're past the table end.
-    let extendTable = newRowNum > tableLastRow;
+    const extendTable = newRowNum > tableLastRow;
     if (totalsRowCount > 0) totalsRowEl = findRowEl(sheetDataEl, end.row);
 
     if (extendTable) {
@@ -1902,8 +1948,8 @@ async function generateSafeWorkbookBuffer() {
     const edits = bySheet[sheetName].filter(e => e.type === 'edit');
 
     for (const edit of adds) {
-      console.log('[SBA] Applying ADD to "' + sheetName + '" values:', edit.values);
-      const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo);
+      console.log('[SBA] Applying ADD to "' + sheetName + '" values:', edit.values, 'preferredExcelRow:', edit.preferredExcelRow);
+      const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo, edit.preferredExcelRow);
       if (newName) addedCompanyNames.push(String(newName));
       else {
         // Fallback: use expected name from values so validation still runs
