@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v13</title>
+<title>SBA Drive CRM v14</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -451,11 +451,12 @@ let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
 let originalArrayBuffer = null;    // the exact original .xlsx bytes downloaded from Drive — kept untouched, this is the source of truth for anything we save/download (PROBLEM 2 fix)
 let pendingEdits = [];             // [{type:'add', sheetName, values, _uiRowIndex?} | {type:'edit', sheetName, rowIndex, values}] — applied directly to the original XML at save/download time
+let recentActivityFeed = [];       // session add/edit activity for Recent list
 let isDirty = false;               // true when there are pendingEdits not yet confirmed saved to Drive
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba13-2026-08-16-tooltips';
+const SBA_APP_VERSION = 'sba14-2026-08-16-sheets-activity';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1106,21 +1107,46 @@ function escapeHtml(str) {
 
 // ==================== DASHBOARD ====================
 function companyTempBucket(c) {
-  // Prefer explicit opp_status; else Priority; else Relationship Level
+  // Hot / Warm / Cold for UI badges (not Relationship Level text)
   const s = String(c.opp_status || '').toLowerCase();
-  if (s === 'hot' || s === 'critical') return 'hot';
-  if (s === 'warm' || s === 'high' || s === 'medium' || s.indexOf('good') !== -1) return 'warm';
-  if (s === 'cold' || s === 'low') return 'cold';
+  if (s === 'hot') return 'hot';
+  if (s === 'warm') return 'warm';
+  if (s === 'cold') return 'cold';
   const p = String(c.priority || '').toLowerCase();
   if (p === 'critical') return 'hot';
   if (p === 'high' || p === 'medium') return 'warm';
   if (p === 'low') return 'cold';
+  const score = parseFloat(c.priority_score);
+  if (!isNaN(score)) {
+    if (score >= 65) return 'hot';
+    if (score >= 25) return 'warm';
+    return 'cold';
+  }
   const r = String(c.relationship_level || '').toLowerCase();
   if (r.indexOf('good') !== -1) return 'warm';
   if (r === 'warm') return 'warm';
   if (r === 'cold') return 'cold';
   return 'warm';
 }
+function tempLabel(bucket) {
+  const b = String(bucket || '').toLowerCase();
+  if (b === 'hot') return 'Hot';
+  if (b === 'cold') return 'Cold';
+  return 'Warm';
+}
+function logActivity(entry) {
+  recentActivityFeed.unshift({
+    type: entry.type || 'update',
+    name: entry.name || 'Unnamed',
+    industry: entry.industry || '',
+    temp: entry.temp || 'warm',
+    sheetName: entry.sheetName || '',
+    rowIndex: entry.rowIndex != null ? entry.rowIndex : -1,
+    at: entry.at || Date.now()
+  });
+  if (recentActivityFeed.length > 50) recentActivityFeed.length = 50;
+}
+
 
 // Chart.js instances (destroy on re-render to avoid leaks)
 let sbaCharts = { stage: null, priority: null, visits: null, score: null };
@@ -1556,16 +1582,39 @@ function renderDashboard() {
   }
   if (el('trendCard')) el('trendCard').style.display = '';
 
-    // Recent
-  const recent = companies.slice().sort(function(a, b) { return (b._rowIndex || 0) - (a._rowIndex || 0); }).slice(0, 5);
+  // Recent activity: session adds/edits first, then fill from last-contact — show 10, badge Hot/Warm/Cold
+  const feedItems = recentActivityFeed.slice(0, 10).map(function(a) {
+    return {
+      name: a.name,
+      industry: a.industry,
+      temp: a.temp,
+      type: a.type,
+      _rowIndex: a.rowIndex,
+      _sheetName: a.sheetName,
+      _fromFeed: true
+    };
+  });
+  const feedNames = {};
+  feedItems.forEach(function(a) { feedNames[(a.name || '').toLowerCase()] = true; });
+  const byContact = companies.slice().sort(function(a, b) {
+    const da = excelSerialToDate(a.last_contact_date) || excelSerialToDate(a.first_contact_date);
+    const db = excelSerialToDate(b.last_contact_date) || excelSerialToDate(b.first_contact_date);
+    return (db ? db.getTime() : 0) - (da ? da.getTime() : 0);
+  }).filter(function(c) { return !feedNames[(c.name || '').toLowerCase()]; });
+  const recent = feedItems.concat(byContact).slice(0, 10);
   if (el('recentActivity')) {
     el('recentActivity').innerHTML = recent.map(function(c) {
-      const p = companyPriorityLabel(c) || c.relationship_level || '';
+      const bucket = c._fromFeed ? (c.temp || 'warm') : companyTempBucket(c);
+      const label = tempLabel(bucket);
       const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
-      return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
+      const sub = escapeHtml(c.industry || '');
+      const action = c._fromFeed ? (c.type === 'add' ? ' • Added' : ' • Updated') : '';
+      const canOpen = c._rowIndex != null && c._rowIndex >= 0 && c._sheetName;
+      const onclick = canOpen ? ('onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')"') : '';
+      return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" ' + onclick + '>' +
         '<div><div style="font-weight:600;font-size:14px;">' + escapeHtml(c.name || 'Unnamed') + '</div>' +
-        '<div style="font-size:12px;color:var(--text-light);">' + escapeHtml(c.industry || '') + (c.sales_stage ? ' • ' + escapeHtml(c.sales_stage) : '') + '</div></div>' +
-        '<span class="badge badge-' + escapeHtml(companyTempBucket(c)) + '">' + escapeHtml(p) + '</span></div>';
+        '<div style="font-size:12px;color:var(--text-light);">' + sub + action + '</div></div>' +
+        '<span class="badge badge-' + escapeHtml(bucket) + '">' + label + '</span></div>';
     }).join('') || '<p class="empty-state">No companies</p>';
   }
   if (el('recentActivityCard')) el('recentActivityCard').style.display = '';
@@ -1583,7 +1632,7 @@ function renderCompanies() {
     <div class="company-card" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
       <div class="company-header">
         <div class="company-name">${escapeHtml(c.name || 'Unnamed')}</div>
-        <span class="badge badge-${escapeHtml(companyTempBucket(c))}">${escapeHtml(c.priority || c.opp_status || companyTempBucket(c))}</span>
+        <span class="badge badge-${escapeHtml(companyTempBucket(c))}">${escapeHtml(tempLabel(companyTempBucket(c)))}</span>
       </div>
       <div class="company-meta">
         <span class="badge badge-industry">${escapeHtml(c.industry || '')}</span>
@@ -1725,6 +1774,14 @@ function saveCompanyEdit() {
   isDirty = true;
   editingIsPendingAdd = false;
   updateDirtyIndicator();
+  logActivity({
+    type: 'update',
+    name: (editValues.name || editValues.company || document.getElementById('editCompanyName').textContent || 'Updated'),
+    industry: editValues.industry || '',
+    temp: companyTempBucket(editValues),
+    sheetName: editingSheetName,
+    rowIndex: editingCompanyIndex
+  });
 
   showToast('Company updated — unsaved. Tap "Save to Drive" to persist.', 'success');
   navigate('companies');
@@ -1848,6 +1905,14 @@ function saveCompany() {
   });
   isDirty = true;
   updateDirtyIndicator();
+  logActivity({
+    type: 'add',
+    name: name,
+    industry: addValues.industry || '',
+    temp: companyTempBucket(addValues),
+    sheetName: targetName,
+    rowIndex: uiRowIndex
+  });
 
   closeModal('modalAddCompany');
   ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp'].forEach(id => {
@@ -2827,38 +2892,94 @@ async function validateGeneratedWorkbook(buf, expectations) {
 }
 
 // ==================== SHEETS VIEW ====================
+function formatSheetCell(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (val instanceof Date && !isNaN(val)) {
+    const y = val.getFullYear();
+    const mo = String(val.getMonth() + 1).padStart(2, '0');
+    const d = String(val.getDate()).padStart(2, '0');
+    return y + '-' + mo + '-' + d;
+  }
+  if (typeof val === 'number' && val > 20000 && val < 100000 && Number.isInteger(val)) {
+    // likely excel serial date
+    try {
+      const dt = new Date(Date.UTC(1899, 11, 30) + val * 86400000);
+      const y = dt.getUTCFullYear();
+      const mo = String(dt.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(dt.getUTCDate()).padStart(2, '0');
+      return y + '-' + mo + '-' + d;
+    } catch (e) { return String(val); }
+  }
+  return String(val);
+}
+
 function renderSheets() {
-  if (!workbook) { document.getElementById('sheetTabs').innerHTML = ''; document.getElementById('sheetContent').innerHTML = '<p class="empty-state">No file loaded</p>'; return; }
-  const tabs = workbook.SheetNames.map((name, i) => 
-    `<button class="sheet-tab ${i===currentSheet?'active':''}" onclick="showSheet(${i})">${name}</button>`
-  ).join('');
+  if (!workbook) {
+    document.getElementById('sheetTabs').innerHTML = '';
+    document.getElementById('sheetContent').innerHTML = '<p class="empty-state">No file loaded</p>';
+    return;
+  }
+  // Prefer Sales Tracker as default sheet when opening Sheets view
+  if (workbook.SheetNames[currentSheet] == null) currentSheet = 0;
+  const tabs = workbook.SheetNames.map(function(name, i) {
+    return '<button class="sheet-tab ' + (i === currentSheet ? 'active' : '') + '" onclick="showSheet(' + i + ')">' + escapeHtml(name) + '</button>';
+  }).join('');
   document.getElementById('sheetTabs').innerHTML = tabs;
   showSheet(currentSheet);
 }
 
 function showSheet(index) {
   if (!workbook) return;
+  if (index < 0 || index >= workbook.SheetNames.length) index = 0;
   currentSheet = index;
-  document.querySelectorAll('.sheet-tab').forEach((t, i) => t.classList.toggle('active', i === index));
-  const sheet = workbook.Sheets[workbook.SheetNames[index]];
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-  if (data.length === 0) { document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Empty sheet</p>'; return; }
-  const maxRows = Math.min(data.length, 50);
-  const maxCols = Math.min(data[0].length, 10);
-  let html = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  document.querySelectorAll('.sheet-tab').forEach(function(tab, i) { tab.classList.toggle('active', i === index); });
+  const sheetName = workbook.SheetNames[index];
+  const sheet = workbook.Sheets[sheetName];
+  if (!sheet) {
+    document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Sheet not found</p>';
+    return;
+  }
+  // Use sheet_to_json with blankrows so structure is preserved; defval keeps columns aligned
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false, raw: false });
+  if (!data || data.length === 0) {
+    document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Empty sheet</p>';
+    return;
+  }
+  // Column count = max width across rows (not just row 0)
+  let maxCols = 0;
+  for (let r = 0; r < data.length; r++) {
+    if (data[r] && data[r].length > maxCols) maxCols = data[r].length;
+  }
+  if (maxCols === 0) maxCols = 1;
+  // Cap display size for mobile performance; allow more rows/cols than before
+  const maxRows = Math.min(data.length, 200);
+  const showCols = Math.min(maxCols, 25);
+
+  let html = '<div style="margin-bottom:8px;font-size:12px;color:var(--text-light);">' +
+    escapeHtml(sheetName) + ' — showing ' + Math.min(maxRows, data.length) + ' of ' + data.length + ' rows, ' +
+    showCols + ' of ' + maxCols + ' columns</div>';
+  html += '<div style="overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:var(--radius-sm);-webkit-overflow-scrolling:touch;">';
+  html += '<table style="width:max-content;min-width:100%;border-collapse:collapse;font-size:12px;">';
   for (let r = 0; r < maxRows; r++) {
     html += '<tr>';
-    for (let c = 0; c < maxCols; c++) {
-      const val = data[r][c] !== undefined ? data[r][c] : '';
-      if (r === 0) html += `<th style="background:var(--primary);color:white;padding:8px;text-align:left;font-size:11px;white-space:nowrap;">${val}</th>`;
-      else html += `<td style="padding:8px;border-bottom:1px solid var(--border);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;">${val}</td>`;
+    for (let c = 0; c < showCols; c++) {
+      const raw = data[r] && data[r][c] !== undefined ? data[r][c] : '';
+      const val = escapeHtml(formatSheetCell(raw));
+      if (r === 0) {
+        html += '<th style="background:var(--primary);color:white;padding:8px 10px;text-align:left;font-size:11px;white-space:nowrap;position:sticky;top:0;z-index:2;">' + val + '</th>';
+      } else {
+        html += '<td style="padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="' + val + '">' + val + '</td>';
+      }
     }
     html += '</tr>';
   }
-  if (data.length > 50) html += `<tr><td colspan="${maxCols}" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">... ${data.length - 50} more rows</td></tr>`;
+  if (data.length > maxRows) {
+    html += '<tr><td colspan="' + showCols + '" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">… ' + (data.length - maxRows) + ' more rows</td></tr>';
+  }
   html += '</table></div>';
   document.getElementById('sheetContent').innerHTML = html;
 }
+
 
 // ==================== DRIVE FILES LIST ====================
 function listDriveFiles() {
