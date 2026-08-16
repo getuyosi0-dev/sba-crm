@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v7</title>
+<title>SBA Drive CRM v9</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -423,7 +423,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba7-2026-08-16-excel-dates';
+const SBA_APP_VERSION = 'sba9-2026-08-16-formula-cols';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -454,6 +454,13 @@ const FIELD_ALIASES = {
   next_action: ['next_action', 'action'],
   next_follow_up_date: ['next_follow_up_date', 'next_followup_date', 'follow_up_date', 'next_follow_up'],
   sales_owner: ['sales_owner', 'owner', 'rep'],
+  first_contact_date: ['first_contact_date', 'first_contact', 'date_first_contact'],
+  last_contact_date: ['last_contact_date', 'last_contact', 'date_last_contact', 'last_visit_date'],
+  total_contacted: ['total_contacted', 'total_contact', 'visit_count', 'times_contacted', 'no_of_visits'],
+  days_since_last_visit: ['days_since_last_visit', 'days_since_visit', 'days_since_last_contact'],
+  follow_up_status: ['follow_up_status', 'followup_status'],
+  priority_score: ['priority_score', 'score'],
+  rank_helper: ['rank_helper', 'rank', 'rank_helper_'],
   application_type: ['application_type', 'app_type', 'application', 'tech_application'],
   number_of_technologies: ['number_of_technologies', 'num_technologies', 'technologies', 'tech_count', 'no_of_technologies'],
   number_of_brands: ['number_of_brands', 'num_brands', 'brands', 'brand_count', 'no_of_brands'],
@@ -462,6 +469,12 @@ const FIELD_ALIASES = {
 
 // Always store these as Excel text (inlineStr), never as numbers — protects phone numbers, names, etc.
 const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'current_supplier', 'next_action', 'sales_owner', 'application_type']);
+
+// These columns are Excel formulas — never overwrite with static values from the form
+const FORMULA_ONLY_FIELDS = new Set([
+  'days_since_last_visit', 'days_since_visit', 'probability', 'priority_score', 'priority',
+  'next_action', 'follow_up_status', 'rank_helper', 'rank', 'exp_revenue'
+]);
 
 const SS_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 
@@ -1793,6 +1806,20 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
         })
       : null;
     const formulaEl = templateCellEl ? ssFirst(templateCellEl, 'f') : null;
+    // Find a date/number format style for this column if template cell has none
+    // (blank template rows often omit s= on empty date cells → serial shows as 46230)
+    function findColStyle(colIdx) {
+      if (templateCellEl && templateCellEl.hasAttribute('s')) return templateCellEl.getAttribute('s');
+      const rows = ssChildren(sheetDataEl, 'row');
+      for (let i = 0; i < Math.min(rows.length, 40); i++) {
+        const c = ssChildren(rows[i], 'c').find(cell => {
+          const r = colIndexFromRef(cell.getAttribute('r'));
+          return r && r.col === colIdx && cell.hasAttribute('s');
+        });
+        if (c) return c.getAttribute('s');
+      }
+      return null;
+    }
     // Accept value under this key OR under any alias that maps here
     let val = values[key];
     if (val === undefined || val === null || val === '') {
@@ -1805,30 +1832,44 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
       }
     }
     if (val !== undefined && val !== null && val !== '') val = coerceValueForExcel(key, val);
+    // Never push form values into calculated columns (Days Since, Probability, Rank, …)
+    if (FORMULA_ONLY_FIELDS.has(key) || FORMULA_ONLY_FIELDS.has(key.replace(/_+/g, '_'))) {
+      val = undefined; // force formula-only path
+    }
     const hasValue = val !== undefined && val !== null && val !== '';
 
-    if (!formulaEl && !hasValue) return; // keep row minimal
+    // If this is a formula column but template cell had no formula, search nearby rows
+    let useFormulaEl = formulaEl;
+    if (!useFormulaEl && (FORMULA_ONLY_FIELDS.has(key) || /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key))) {
+      const rows = ssChildren(sheetDataEl, 'row');
+      for (let i = 0; i < Math.min(rows.length, 30); i++) {
+        const c = ssChildren(rows[i], 'c').find(cell => {
+          const r = colIndexFromRef(cell.getAttribute('r'));
+          return r && r.col === col;
+        });
+        const f = c ? ssFirst(c, 'f') : null;
+        if (f) { useFormulaEl = f; break; }
+      }
+    }
+
+    if (!useFormulaEl && !hasValue) return; // keep row minimal
 
     const newCell = ssEl(doc, 'c');
     newCell.setAttribute('r', colRef);
-    if (templateCellEl && templateCellEl.hasAttribute('s')) {
-      newCell.setAttribute('s', templateCellEl.getAttribute('s'));
-    }
+    const styleId = findColStyle(col);
+    if (styleId != null) newCell.setAttribute('s', styleId);
 
-    if (formulaEl) {
+    if (useFormulaEl) {
       // Preserve formula as formula; shift same-row relative refs only
       const fEl = ssEl(doc, 'f');
-      fEl.textContent = shiftFormulaRow(formulaEl.textContent, templateRowNum, newRowNum);
+      // When formula came from a different template row, shift from that row if possible
+      fEl.textContent = shiftFormulaRow(useFormulaEl.textContent, templateRowNum, newRowNum);
       newCell.appendChild(fEl);
-      // Optionally copy cached value so Excel shows something before recalc
-      const oldV = templateCellEl.getElementsByTagName('v')[0];
-      if (oldV) {
-        // leave value out so Excel is forced to recalculate — cleaner for relative formulas
-      }
     } else {
       if (key === 'name' || key === 'company_name' || key === 'company') {
         addedCompanyName = String(val);
       }
+      console.log('[SBA] Write col', colLetters(col) + newRowNum, 'key=' + key, 'val=' + val);
       if (!shouldForceText(key, val) && isNumericLike(val)) {
         const vEl = ssEl(doc, 'v');
         vEl.textContent = String(val);
@@ -1951,6 +1992,17 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
     } else {
       while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
       cellEl.removeAttribute('t');
+    }
+    // Ensure date columns keep a date number format
+    if (isDateFieldKey(key) && !cellEl.hasAttribute('s')) {
+      const rows = ssChildren(rowEl.parentNode, 'row');
+      for (let i = 0; i < Math.min(rows.length, 40); i++) {
+        const sample = ssChildren(rows[i], 'c').find(c => {
+          const r = colIndexFromRef(c.getAttribute('r'));
+          return r && r.col === col && c.hasAttribute('s');
+        });
+        if (sample) { cellEl.setAttribute('s', sample.getAttribute('s')); break; }
+      }
     }
 
     if (!shouldForceText(key, val) && isNumericLike(val)) {
