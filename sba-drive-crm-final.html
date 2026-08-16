@@ -344,37 +344,50 @@ body { padding-bottom: 80px; }
   <div class="modal-sheet">
     <div class="modal-header"><div class="modal-title">Add Company</div><button class="modal-close" onclick="closeModal('modalAddCompany')">&times;</button></div>
     <div class="modal-body">
+      <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Only enter inputs Excel needs. Probability, Priority Score, Rank, Days Since Visit, Next Action and Follow-up Status are calculated automatically.</p>
       <div class="form-group"><label class="form-label">Company Name *</label><input type="text" class="form-input" id="acName"></div>
-      <div class="form-group"><label class="form-label">Brand Name</label><input type="text" class="form-input" id="acBrand"></div>
       <div class="form-group">
-        <label class="form-label">Industry *</label>
+        <label class="form-label">Industry</label>
         <select class="form-select" id="acIndustry">
           <option value="">Select Industry</option>
-          <option>Water Bottling</option><option>Beer & Brewing</option><option>Soft Drink Factories</option>
+          <option>Water Bottling</option><option>Beverage - Brewing</option><option>Beverage - Wine</option>
+          <option>Beverage - Alcohol</option><option>Beverage - Juice</option><option>Soft Drink</option>
           <option>Food Processing</option><option>Dairy</option><option>Pharmaceutical</option>
-          <option>Cosmetics and Personal care</option><option>Edible oil</option><option>Chemicals & Paint</option>
-          <option>Pipes & Cables</option><option>Coffee Processing</option><option>Tobacco</option>
-          <option>Wine</option><option>Alcohol and Liquer</option><option>Manufacturing (General)</option>
+          <option>Cosmetics</option><option>Soap Manufacturing</option><option>Edible Oil</option>
+          <option>Paint Manufacturing</option><option>Chemicals Manufacturing</option>
+          <option>Plastic Pipe Manufacturing</option><option>Cable Manufacturing</option>
+          <option>Coffee Processing/Trading</option><option>Tobacco</option><option>Manufacturing</option>
+          <option>Agriculture/Livestock</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Location</label><input type="text" class="form-input" id="acLocation"></div>
+      <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acContact"></div>
+      <div class="form-group"><label class="form-label">First Contact Date</label><input type="date" class="form-input" id="acFirstContact"></div>
+      <div class="form-group"><label class="form-label">Last Contact Date</label><input type="date" class="form-input" id="acLastContact"></div>
+      <div class="form-group"><label class="form-label">Total Contacted</label><input type="number" class="form-input" id="acTotalContacted" min="0" value="1"></div>
+      <div class="form-group"><label class="form-label">Current Supplier</label><input type="text" class="form-input" id="acSupplier" placeholder="e.g. Domino, Videojet, Markem-imaje"></div>
       <div class="form-group">
-        <label class="form-label">Opportunity Status</label>
-        <select class="form-select" id="acStatus"><option value="Hot">Hot</option><option value="Warm" selected>Warm</option><option value="Cold">Cold</option></select>
+        <label class="form-label">Sales Potential</label>
+        <select class="form-select" id="acPotential"><option>High</option><option selected>Medium</option><option>Low</option></select>
       </div>
       <div class="form-group">
         <label class="form-label">Sales Stage</label>
         <select class="form-select" id="acStage">
-          <option>Lead</option><option>Qualified</option><option>Need Identified</option><option>Technical Discussion</option>
-          <option>Demo / Sample</option><option>Proposal Sent</option><option>Negotiation</option>
-          <option>Waiting Customer Decision</option><option>Purchase Order</option><option>Won</option><option>Lost</option>
+          <option selected>Lead</option><option>Qualified</option><option>Need Identified</option>
+          <option>Technical Discussion</option><option>Demo / Sample</option><option>Proposal Sent</option>
+          <option>Negotiation</option><option>Waiting Customer Decision</option><option>Purchase Order</option>
+          <option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Est. Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Probability (%)</label><input type="number" class="form-input" id="acProb" min="0" max="100" value="25"></div>
-      <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acContact"></div>
-      <div class="form-group"><label class="form-label">Phone</label><input type="tel" class="form-input" id="acPhone"></div>
-      <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="acNotes"></textarea></div>
+      <div class="form-group"><label class="form-label">Opportunity Summary / Notes</label><textarea class="form-textarea" id="acNotes"></textarea></div>
+      <div class="form-group"><label class="form-label">Est. Business Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Next Follow-up Date</label><input type="date" class="form-input" id="acFollowUp"></div>
+      <div class="form-group">
+        <label class="form-label">Relationship Level</label>
+        <select class="form-select" id="acRelationship">
+          <option>Good Relationship</option><option selected>Warm</option><option>Cold</option>
+        </select>
+      </div>
+      <div class="form-group"><label class="form-label">Sales Owner</label><input type="text" class="form-input" id="acOwner" value="Yosef Getu"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modalAddCompany')">Cancel</button>
@@ -410,7 +423,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba3-2026-08-14-row81';
+const SBA_APP_VERSION = 'sba3-2026-08-14-inputs-only';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1148,17 +1161,19 @@ function editCompany(rowIndex, sheetName) {
 
   const fields = [
     {key:'name',label:'Company Name',type:'text'},
-    {key:'brand_name',label:'Brand Name',type:'text'},
-    {key:'industry',label:'Industry',type:'select',options:['Water Bottling','Beer & Brewing','Soft Drink Factories','Food Processing','Dairy','Pharmaceutical','Cosmetics and Personal care','Edible oil','Chemicals & Paint','Pipes & Cables','Coffee Processing','Tobacco','Wine','Alcohol and Liquer','Manufacturing (General)']},
-    {key:'location',label:'Location',type:'text'},
-    {key:'opp_status',label:'Opportunity Status',type:'select',options:['Hot','Warm','Cold']},
-    {key:'sales_stage',label:'Sales Stage',type:'select',options:['Lead','Qualified','Need Identified','Technical Discussion','Demo / Sample','Proposal Sent','Negotiation','Waiting Customer Decision','Purchase Order','Won','Lost']},
-    {key:'priority',label:'Priority',type:'select',options:['High','Medium','Low']},
-    {key:'est_value',label:'Est. Value (ETB)',type:'number'},
-    {key:'probability',label:'Probability (%)',type:'number'},
+    {key:'industry',label:'Industry',type:'select',options:['Water Bottling','Beverage - Brewing','Beverage - Wine','Beverage - Alcohol','Beverage - Juice','Soft Drink','Food Processing','Dairy','Pharmaceutical','Cosmetics','Soap Manufacturing','Edible Oil','Paint Manufacturing','Chemicals Manufacturing','Plastic Pipe Manufacturing','Cable Manufacturing','Coffee Processing/Trading','Tobacco','Manufacturing','Agriculture/Livestock']},
     {key:'contact_person',label:'Contact Person',type:'text'},
-    {key:'phone',label:'Phone',type:'tel'},
-    {key:'notes',label:'Notes',type:'textarea'},
+    {key:'first_contact_date',label:'First Contact Date',type:'date'},
+    {key:'last_contact_date',label:'Last Contact Date',type:'date'},
+    {key:'total_contacted',label:'Total Contacted',type:'number'},
+    {key:'current_supplier',label:'Current Supplier',type:'text'},
+    {key:'sales_potential',label:'Sales Potential',type:'select',options:['High','Medium','Low']},
+    {key:'sales_stage',label:'Sales Stage',type:'select',options:['Lead','Qualified','Need Identified','Technical Discussion','Demo / Sample','Proposal Sent','Negotiation','Waiting Customer Decision','Purchase Order','Won','Lost','Decision time taking long','No Opportunity']},
+    {key:'notes',label:'Opportunity Summary / Notes',type:'textarea'},
+    {key:'est_value',label:'Est. Business Value (ETB)',type:'number'},
+    {key:'next_follow_up_date',label:'Next Follow-up Date',type:'date'},
+    {key:'relationship_level',label:'Relationship Level',type:'select',options:['Good Relationship','Warm','Cold']},
+    {key:'sales_owner',label:'Sales Owner',type:'text'},
   ];
 
   document.getElementById('editForm').innerHTML = fields.map(f => {
@@ -1186,7 +1201,7 @@ function saveCompanyEdit() {
 
   const row = data[editingCompanyIndex];
   // Editable inputs only — never push formula-driven fields (priority, probability, next_action, rank)
-  const fields = ['name','brand_name','industry','location','opp_status','sales_stage','est_value','contact_person','phone','notes'];
+  const fields = ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner'];
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
     if (!el) return;
@@ -1195,13 +1210,7 @@ function saveCompanyEdit() {
       row[headerMap[actualKey]] = el.value;
     }
   });
-  // Relationship level from status if that column exists
-  const statusEl = document.getElementById('edit_opp_status');
-  if (statusEl && canonMap.relationship_level && headerMap[canonMap.relationship_level] !== undefined) {
-    const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
-    row[headerMap[canonMap.relationship_level]] = relMap[statusEl.value] || statusEl.value;
-  }
-  // Opportunity summary from notes
+  // Notes also write to Opportunity Summary when that column exists
   const notesEl = document.getElementById('edit_notes');
   if (notesEl && canonMap.opportunity_summary && headerMap[canonMap.opportunity_summary] !== undefined) {
     row[headerMap[canonMap.opportunity_summary]] = notesEl.value;
@@ -1217,11 +1226,6 @@ function saveCompanyEdit() {
     editValues[actualKey] = el.value;
     editValues[f] = el.value;
   });
-  if (statusEl && canonMap.relationship_level) {
-    const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
-    editValues[canonMap.relationship_level] = relMap[statusEl.value] || statusEl.value;
-    editValues.relationship_level = editValues[canonMap.relationship_level];
-  }
   if (notesEl && canonMap.opportunity_summary) {
     editValues[canonMap.opportunity_summary] = notesEl.value;
     editValues.opportunity_summary = notesEl.value;
@@ -1252,8 +1256,7 @@ function openModal(id) { document.getElementById(id).classList.add('active'); }
 function saveCompany() {
   if (!workbook) { showToast('Load a file first', 'error'); return; }
   const name = document.getElementById('acName').value.trim();
-  const industry = document.getElementById('acIndustry').value;
-  if (!name || !industry) { showToast('Name and industry required', 'error'); return; }
+  if (!name) { showToast('Company name is required', 'error'); return; }
 
   const targetName = findTargetSheetName() || workbook.SheetNames[0];
   const sheet = workbook.Sheets[targetName];
@@ -1266,43 +1269,38 @@ function saveCompany() {
 
   const newRow = new Array(Math.max(headers.length, 1)).fill('');
   const setVal = (canonical, val) => {
+    if (val === undefined || val === null || val === '') return false;
     const actual = canonMap[canonical] || (headerMap[canonical] !== undefined ? canonical : null);
     if (actual != null && headerMap[actual] !== undefined) {
       newRow[headerMap[actual]] = val;
       return true;
     }
-    // only warn for core fields
     if (['name', 'industry', 'sales_stage', 'contact_person', 'est_value'].indexOf(canonical) !== -1) {
       console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).join(', '));
     }
     return false;
   };
 
-  const statusVal = document.getElementById('acStatus').value;
-  const stageVal = document.getElementById('acStage').value;
+  // INPUTS ONLY — never write formula columns (probability, priority score, priority, next action, rank, days since visit, follow-up status)
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
   setVal('name', name);
-  setVal('brand_name', document.getElementById('acBrand').value.trim());
-  setVal('industry', industry);
-  setVal('location', document.getElementById('acLocation').value.trim());
-  setVal('sales_stage', stageVal);
-  // Relationship Level maps from Hot/Warm/Cold status
-  const relMap = { Hot: 'Good Relationship', Warm: 'Warm', Cold: 'Cold' };
-  setVal('relationship_level', relMap[statusVal] || statusVal);
-  setVal('opp_status', statusVal); // only if column exists
-  // Sales Potential from status
-  setVal('sales_potential', statusVal === 'Hot' ? 'High' : statusVal === 'Warm' ? 'Medium' : 'Low');
-  // Do NOT write priority / probability when they are formula columns — template formulas handle them
-  const val = parseFloat(document.getElementById('acValue').value) || 0;
-  if (val) setVal('est_value', val);
-  setVal('contact_person', document.getElementById('acContact').value.trim());
-  setVal('phone', document.getElementById('acPhone').value.trim());
-  const notes = document.getElementById('acNotes').value.trim();
+  setVal('industry', g('acIndustry'));
+  setVal('contact_person', g('acContact'));
+  setVal('first_contact_date', g('acFirstContact'));
+  setVal('last_contact_date', g('acLastContact'));
+  const totalC = g('acTotalContacted');
+  if (totalC !== '') setVal('total_contacted', parseFloat(totalC) || 0);
+  setVal('current_supplier', g('acSupplier'));
+  setVal('sales_potential', g('acPotential') || 'Medium');
+  setVal('sales_stage', g('acStage') || 'Lead');
+  const notes = g('acNotes');
   setVal('notes', notes);
   setVal('opportunity_summary', notes);
-  setVal('sales_owner', 'Yosef Getu');
-
-  // Optional fields only if columns exist — never invent columns
-  setVal('application_type', 'Date Coding');
+  const val = parseFloat(g('acValue')) || 0;
+  if (val) setVal('est_value', val);
+  setVal('next_follow_up_date', g('acFollowUp'));
+  setVal('relationship_level', g('acRelationship') || 'Warm');
+  setVal('sales_owner', g('acOwner') || 'Yosef Getu');
 
   // Robust duplicate guard
   const nameKey = canonMap['name'] || 'company' || 'name';
@@ -1368,7 +1366,7 @@ function saveCompany() {
   updateDirtyIndicator();
 
   closeModal('modalAddCompany');
-  ['acName','acBrand','acLocation','acValue','acNotes','acContact','acPhone'].forEach(id => {
+  ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
 
@@ -1497,9 +1495,25 @@ function ssFirst(parent, localName) {
 async function loadSharedStrings(zip) {
   const file = zip.file('xl/sharedStrings.xml');
   if (!file) return [];
-  const doc = new DOMParser().parseFromString(await file.async('string'), 'application/xml');
-  const sis = ssChildren(doc, 'si');
-  return sis.map(si => ssChildren(si, 't').map(t => t.textContent || '').join(''));
+  const xml = await file.async('string');
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  let sis = ssChildren(doc, 'si');
+  if (sis.length) {
+    return sis.map(si => ssChildren(si, 't').map(t => t.textContent || '').join(''));
+  }
+  // Regex fallback when DOM namespace handling returns no <si> nodes
+  const out = [];
+  const re = /<si[^>]*>([\s\S]*?)<\/si>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const texts = [];
+    const tre = /<t[^>]*>([\s\S]*?)<\/t>/g;
+    let tm;
+    while ((tm = tre.exec(m[1])) !== null) texts.push(tm[1]);
+    out.push(texts.join(''));
+  }
+  console.log('[SBA] sharedStrings via regex fallback:', out.length);
+  return out;
 }
 
 function cellText(cellEl, sharedStrings) {
@@ -1969,29 +1983,40 @@ async function generateSafeWorkbookBuffer() {
     const headerRow = findRowEl(sheetDataEl, headerExcelRow);
     if (!headerRow) throw new Error('the "' + sheetName + '" sheet has no header row (row ' + headerExcelRow + ') — aborting');
     const headerColMap = {};
+    // 1) Read headers from XML cells (shared strings / inline)
     ssChildren(headerRow, 'c').forEach(c => {
       const ref = colIndexFromRef(c.getAttribute('r'));
       if (!ref) return;
       const text = cellText(c, sharedStrings);
       if (text) headerColMap[normalizeHeader(text)] = ref.col;
     });
-    // Fallback: if XML shared-string resolution failed, use SheetJS header map
-    if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
-      console.warn('[SBA] XML header map missing Company — falling back to SheetJS headers');
-      try {
-        const sheet = workbook && workbook.Sheets[sheetName];
-        if (sheet) {
-          const info = getSheetAoaInfo(sheet);
-          (info.headers || []).forEach((h, i) => {
-            const key = normalizeHeader(h);
-            if (key && headerColMap[key] === undefined) headerColMap[key] = i;
-          });
-        }
-      } catch (e) { console.warn('[SBA] SheetJS header fallback failed', e); }
-    }
+    // 2) ALWAYS merge SheetJS headers (source of truth for names the UI already mapped).
+    //    Column index from SheetJS matches Excel col when header row is left-aligned from A.
+    try {
+      const sheet = workbook && workbook.Sheets[sheetName];
+      if (sheet) {
+        const info = getSheetAoaInfo(sheet);
+        (info.headers || []).forEach((h, i) => {
+          const key = normalizeHeader(h);
+          if (!key) return;
+          // Prefer existing XML-derived col if present; otherwise use SheetJS index
+          if (headerColMap[key] === undefined) headerColMap[key] = i;
+        });
+      }
+    } catch (e) { console.warn('[SBA] SheetJS header merge failed', e); }
+    // 3) Alias safety: ensure canonical keys exist if any alias key was found
+    Object.keys(FIELD_ALIASES).forEach(canon => {
+      if (headerColMap[canon] !== undefined) return;
+      for (const a of FIELD_ALIASES[canon]) {
+        if (headerColMap[a] !== undefined) { headerColMap[canon] = headerColMap[a]; break; }
+      }
+    });
     console.log('[SBA] Sheet "' + sheetName + '" header Excel row', headerExcelRow, 'cols:', Object.keys(headerColMap));
     if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
+      console.error('[SBA] Header map dump:', headerColMap);
       throw new Error('No Company/Name column found in "' + sheetName + '" — cannot add company. Headers: ' + Object.keys(headerColMap).join(', '));
+    } else {
+      console.log('[SBA] Company column index:', headerColMap.company ?? headerColMap.name ?? headerColMap.company_name);
     }
 
     // Process adds first (extend table sequentially), then edits of existing rows
