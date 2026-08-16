@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v9</title>
+<title>SBA Drive CRM v10</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -423,7 +423,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba9-2026-08-16-formula-cols';
+const SBA_APP_VERSION = 'sba10-2026-08-16-full-formulas';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1660,6 +1660,71 @@ function shiftFormulaRow(formula, fromRow, toRow) {
   });
   return out;
 }
+// Resolve formula text from a <c> cell. Handles shared formulas where only the
+// master has text and siblings are <f t="shared" si="N"/>.
+function getFormulaTextFromCell(cellEl, sheetDataEl) {
+  if (!cellEl) return { text: '', fromRow: null };
+  // Accept either <c> or <f> element
+  let f = cellEl;
+  if ((cellEl.localName || cellEl.tagName || '').replace(/^.*:/, '').toLowerCase() !== 'f') {
+    f = ssFirst(cellEl, 'f');
+  }
+  if (!f) return { text: '', fromRow: null };
+  const text = (f.textContent || '').trim();
+  if (text) {
+    const ref = (cellEl.getAttribute && cellEl.getAttribute('r')) || (f.parentNode && f.parentNode.getAttribute && f.parentNode.getAttribute('r'));
+    const parsed = ref ? colIndexFromRef(ref) : null;
+    return { text: text, fromRow: parsed ? parsed.row : null };
+  }
+  const tAttr = f.getAttribute('t') || '';
+  const si = f.getAttribute('si');
+  if (tAttr === 'shared' && si != null && sheetDataEl) {
+    const allF = sheetDataEl.getElementsByTagName('f');
+    for (let i = 0; i < allF.length; i++) {
+      const el = allF[i];
+      if ((el.getAttribute('si') || '') === si) {
+        const master = (el.textContent || '').trim();
+        if (master) {
+          const masterCell = el.parentNode;
+          const ref = masterCell && masterCell.getAttribute ? masterCell.getAttribute('r') : null;
+          const parsed = ref ? colIndexFromRef(ref) : null;
+          return { text: master, fromRow: parsed ? parsed.row : null };
+        }
+      }
+    }
+  }
+  return { text: '', fromRow: null };
+}
+
+// Built-in formulas for Sales Tracker calculated columns (row 2 template).
+// Used when XML has empty/shared formula stubs so we never write bare "=".
+function builtInFormulaForKey(key, rowNum) {
+  const r = rowNum;
+  const k = String(key || '').toLowerCase();
+  if (k === 'days_since_last_visit' || k === 'days_since_visit') {
+    return 'IF(A' + r + '="","",IF(E' + r + '="","",TODAY()-E' + r + '))';
+  }
+  if (k === 'probability' || k === 'probability_') {
+    return "IF(A" + r + '="","",IFERROR(VLOOKUP(J' + r + ",'_Lists'!$A$2:$B$13,2,0),0))";
+  }
+  if (k === 'priority_score') {
+    return "IF(A" + r + '="","",MIN(100,ROUND(M' + r + "*40+IFERROR(VLOOKUP(I" + r + ",'_Lists'!$E$2:$F$4,2,0),0)+IFERROR(VLOOKUP(S" + r + ",'_Lists'!$H$2:$I$4,2,0),0)+MIN(G" + r + ",10)*1+IF(L" + r + ">=1000000,10,IF(L" + r + ">0,5,0))+IF(AND(Q" + r + '<>"",Q' + r + "<TODAY()),5,IF(AND(Q" + r + '<>"",Q' + r + "-TODAY()<=7),3,0)),0)))";
+  }
+  if (k === 'priority') {
+    return 'IF(A' + r + '="","",IF(N' + r + '>=65,"Critical",IF(N' + r + '>=45,"High",IF(N' + r + '>=25,"Medium","Low"))))';
+  }
+  if (k === 'next_action') {
+    return "IF(A" + r + '="","",IFERROR(VLOOKUP(J' + r + ",'_Lists'!$A$2:$C$13,3,0),\"\"))";
+  }
+  if (k === 'follow_up_status') {
+    return "IF(A" + r + '="","",IF(J' + r + '="Won","Closed - Won",IF(J' + r + '="Lost","Closed - Lost",IF(J' + r + '="No Opportunity","Closed - No Opportunity",IF(AND(Q' + r + '<>"",Q' + r + '<TODAY()),"Overdue",IF(J' + r + '="Proposal Sent","Proposal Outstanding",IF(OR(J' + r + '="Technical Discussion",J' + r + '="Demo / Sample"),"Technical Discussion",IF(OR(J' + r + '="Waiting Customer Decision",J' + r + '="Negotiation"),"Waiting Customer","Needs Follow-up"))))))))';
+  }
+  if (k === 'rank_helper' || k === 'rank') {
+    return 'IF(A' + r + '="","",RANK(N' + r + ',$N$2:$N$473)+COUNTIF($N$2:N' + r + ',N' + r + ')-1)';
+  }
+  return null;
+}
+
 
 function serializeXmlDoc(doc, originalXmlStr) {
   let out = new XMLSerializer().serializeToString(doc);
@@ -1852,20 +1917,40 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
       }
     }
 
-    if (!useFormulaEl && !hasValue) return; // keep row minimal
+    // Always write formula columns even when template had no formula node
+    const isFormulaCol = FORMULA_ONLY_FIELDS.has(key) || /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key);
+    if (!useFormulaEl && !hasValue && !isFormulaCol) return; // keep row minimal
 
     const newCell = ssEl(doc, 'c');
     newCell.setAttribute('r', colRef);
     const styleId = findColStyle(col);
     if (styleId != null) newCell.setAttribute('s', styleId);
 
+    // Build formula text: resolve shared formulas, else built-in template for calc columns
+    let formulaText = '';
+    let formulaFromRow = templateRowNum;
     if (useFormulaEl) {
-      // Preserve formula as formula; shift same-row relative refs only
-      const fEl = ssEl(doc, 'f');
-      // When formula came from a different template row, shift from that row if possible
-      fEl.textContent = shiftFormulaRow(useFormulaEl.textContent, templateRowNum, newRowNum);
-      newCell.appendChild(fEl);
+      const resolved = getFormulaTextFromCell(useFormulaEl.parentNode || templateCellEl || useFormulaEl, sheetDataEl);
+      if (resolved.text) {
+        formulaText = resolved.text;
+        if (resolved.fromRow) formulaFromRow = resolved.fromRow;
+      }
+    }
+    if (formulaText && formulaText !== '=') {
+      formulaText = shiftFormulaRow(formulaText, formulaFromRow, newRowNum);
     } else {
+      formulaText = builtInFormulaForKey(key, newRowNum) || '';
+    }
+    if (!formulaText || formulaText === '=') {
+      formulaText = builtInFormulaForKey(key, newRowNum) || '';
+    }
+
+    if (formulaText && formulaText !== '=') {
+      const fEl = ssEl(doc, 'f');
+      fEl.textContent = formulaText.replace(/^=/, '');
+      newCell.appendChild(fEl);
+      console.log('[SBA] Formula', colLetters(col) + newRowNum, key, '→', formulaText.slice(0, 60));
+    } else if (hasValue) {
       if (key === 'name' || key === 'company_name' || key === 'company') {
         addedCompanyName = String(val);
       }
