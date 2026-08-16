@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v10</title>
+<title>SBA Drive CRM v13</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -22,6 +22,7 @@
 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 :root {
   --primary: #0f4c81; --primary-dark: #0a3a63; --accent: #e8b923;
@@ -51,7 +52,8 @@ body { padding-bottom: 80px; }
 .card { background: var(--card); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; box-shadow: var(--shadow); border: 1px solid var(--border); }
 .card-title { font-size: 14px; font-weight: 600; color: var(--text-light); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center; }
 .kpi-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
-.kpi-card { background: var(--card); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); border-left: 4px solid var(--primary); }
+.kpi-card { background: var(--card); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow); border-left: 4px solid var(--primary); cursor: help; transition: transform 0.15s; }
+.kpi-card:hover { transform: translateY(-1px); }
 .kpi-card.hot { border-left-color: var(--danger); }
 .kpi-card.warm { border-left-color: var(--warning); }
 .kpi-card.cold { border-left-color: var(--info); }
@@ -247,10 +249,40 @@ body { padding-bottom: 80px; }
   </div>
 
   <div class="kpi-grid" id="kpiSection" style="display:none;">
-    <div class="kpi-card hot"><div class="kpi-value" id="kpiHot">0</div><div class="kpi-label">Hot</div></div>
-    <div class="kpi-card warm"><div class="kpi-value" id="kpiWarm">0</div><div class="kpi-label">Warm</div></div>
-    <div class="kpi-card cold"><div class="kpi-value" id="kpiCold">0</div><div class="kpi-label">Cold</div></div>
-    <div class="kpi-card success"><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-label">Total Companies</div></div>
+    <div class="kpi-card success"><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-label">Total Customers</div></div>
+    <div class="kpi-card warm"><div class="kpi-value" id="kpiActive">0</div><div class="kpi-label">Active Opportunities</div></div>
+    <div class="kpi-card hot"><div class="kpi-value" id="kpiCriticalHigh">0</div><div class="kpi-label">Critical + High</div></div>
+    <div class="kpi-card cold"><div class="kpi-value" id="kpiOverdue">0</div><div class="kpi-label">Overdue Follow-ups</div></div>
+  </div>
+
+  <div class="card" id="pipelineCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Pipeline by Stage</div>
+    <div style="position:relative;height:220px;margin-bottom:8px;"><canvas id="chartStage"></canvas></div>
+    <div id="pipelineByStage" style="display:grid;gap:6px;"></div>
+  </div>
+
+  <div class="card" id="priorityCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Pipeline by Priority</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center;">
+      <div style="position:relative;height:180px;"><canvas id="chartPriority"></canvas></div>
+      <div id="pipelineByPriority" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;"></div>
+    </div>
+  </div>
+
+  <div class="card" id="trendCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Activity Trends</div>
+    <div style="position:relative;height:200px;margin-bottom:12px;"><canvas id="chartVisits"></canvas></div>
+    <div style="position:relative;height:180px;"><canvas id="chartScore"></canvas></div>
+  </div>
+
+  <div class="card" id="top10Card" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Top 10 by Priority Score</div>
+    <div id="top10List"></div>
+  </div>
+
+  <div class="card" id="otherMetricsCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Other Metrics</div>
+    <div id="otherMetrics" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;"></div>
   </div>
 
   <div class="quick-actions" id="quickActions" style="display:none;">
@@ -423,7 +455,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba10-2026-08-16-full-formulas';
+const SBA_APP_VERSION = 'sba13-2026-08-16-tooltips';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1090,23 +1122,454 @@ function companyTempBucket(c) {
   return 'warm';
 }
 
+// Chart.js instances (destroy on re-render to avoid leaks)
+let sbaCharts = { stage: null, priority: null, visits: null, score: null };
+
+function destroySbaChart(key) {
+  if (sbaCharts[key]) {
+    try { sbaCharts[key].destroy(); } catch (e) {}
+    sbaCharts[key] = null;
+  }
+}
+
+function chartDefaults() {
+  if (typeof Chart === 'undefined') return;
+  Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  Chart.defaults.font.size = 11;
+  Chart.defaults.color = '#6c757d';
+  Chart.defaults.plugins.legend.labels.boxWidth = 12;
+  Chart.defaults.plugins.legend.labels.padding = 10;
+  Chart.defaults.plugins.tooltip.backgroundColor = 'rgba(26, 26, 46, 0.95)';
+  Chart.defaults.plugins.tooltip.titleFont = { size: 13, weight: '600' };
+  Chart.defaults.plugins.tooltip.bodyFont = { size: 12 };
+  Chart.defaults.plugins.tooltip.padding = 12;
+  Chart.defaults.plugins.tooltip.cornerRadius = 8;
+  Chart.defaults.plugins.tooltip.displayColors = true;
+  Chart.defaults.plugins.tooltip.boxPadding = 4;
+  Chart.defaults.plugins.tooltip.usePointStyle = true;
+  Chart.defaults.interaction = { mode: 'nearest', intersect: false, axis: 'x' };
+}
+
+function monthKey(d) {
+  if (!d) return null;
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth() + 1;
+  return y + '-' + String(m).padStart(2, '0');
+}
+function monthLabel(key) {
+  const parts = key.split('-');
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return months[+parts[1] - 1] + ' ' + parts[0].slice(2);
+}
+
+function excelSerialToDate(v) {
+  if (v == null || v === '') return null;
+  if (v instanceof Date && !isNaN(v)) return v;
+  if (typeof v === 'number' && v > 20000 && v < 100000) {
+    return new Date(Date.UTC(1899, 11, 30) + v * 86400000);
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+function companyPriorityLabel(c) {
+  const p = String(c.priority || '').trim();
+  if (p) return p;
+  const score = parseFloat(c.priority_score);
+  if (!isNaN(score)) {
+    if (score >= 65) return 'Critical';
+    if (score >= 45) return 'High';
+    if (score >= 25) return 'Medium';
+    return 'Low';
+  }
+  return '';
+}
+function companyDaysSince(c) {
+  const d = parseFloat(c.days_since_last_visit);
+  if (!isNaN(d) && d >= 0) return d;
+  const last = excelSerialToDate(c.last_contact_date);
+  if (!last) return null;
+  const today = new Date();
+  const t0 = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  return Math.round((t0 - Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate())) / 86400000);
+}
+function isClosedStage(stage) {
+  const s = String(stage || '').toLowerCase();
+  return s === 'won' || s === 'lost' || s === 'no opportunity';
+}
+
 function renderDashboard() {
   if (!workbook) return;
-  const companies = getCompaniesFromWorkbook();
-  const hot = companies.filter(c => companyTempBucket(c) === 'hot').length;
-  const warm = companies.filter(c => companyTempBucket(c) === 'warm').length;
-  const cold = companies.filter(c => companyTempBucket(c) === 'cold').length;
-  document.getElementById('kpiHot').textContent = hot;
-  document.getElementById('kpiWarm').textContent = warm;
-  document.getElementById('kpiCold').textContent = cold;
-  document.getElementById('kpiTotal').textContent = companies.length;
-  const recent = companies.slice(-5).reverse();
-  document.getElementById('recentActivity').innerHTML = recent.map(c => `
-    <div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
-      <div><div style="font-weight:600;font-size:14px;">${escapeHtml(c.name || 'Unnamed')}</div><div style="font-size:12px;color:var(--text-light);">${escapeHtml(c.industry || '')}</div></div>
-      <span class="badge badge-${escapeHtml(String(c.opp_status||'').toLowerCase())}">${escapeHtml(c.opp_status || '')}</span>
-    </div>
-  `).join('') || '<p class="empty-state">No companies</p>';
+  const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim());
+  const total = companies.length;
+  const active = companies.filter(c => !isClosedStage(c.sales_stage)).length;
+  const criticalHigh = companies.filter(c => {
+    const p = companyPriorityLabel(c).toLowerCase();
+    return p === 'critical' || p === 'high';
+  }).length;
+
+  const today = new Date();
+  const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const overdue = companies.filter(c => {
+    if (isClosedStage(c.sales_stage)) return false;
+    const fu = excelSerialToDate(c.next_follow_up_date);
+    if (!fu) return false;
+    const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+    return fuUTC < todayUTC;
+  }).length;
+
+  const el = id => document.getElementById(id);
+  function setKpi(id, value, tip) {
+    const node = el(id);
+    if (!node) return;
+    node.textContent = value;
+    const card = node.closest('.kpi-card');
+    if (card && tip) card.title = tip;
+  }
+  setKpi('kpiTotal', total, total + ' customers with a company name in Sales Tracker');
+  setKpi('kpiActive', active, active + ' open opportunities (not Won / Lost / No Opportunity)');
+  setKpi('kpiCriticalHigh', criticalHigh, criticalHigh + ' companies with Critical or High priority');
+  setKpi('kpiOverdue', overdue, overdue + ' open deals with follow-up date before today');
+
+  // Pipeline by stage
+  const stageOrder = ['Lead','Qualified','Need Identified','Technical Discussion','Demo / Sample','Proposal Sent','Negotiation','Waiting Customer Decision','Purchase Order','Won','Lost','Decision time taking long','No Opportunity'];
+  const stageCounts = {};
+  companies.forEach(c => {
+    const st = String(c.sales_stage || '').trim() || '(blank)';
+    stageCounts[st] = (stageCounts[st] || 0) + 1;
+  });
+  const maxStage = Math.max(1, ...Object.values(stageCounts), 1);
+  const stageKeys = stageOrder.filter(s => stageCounts[s]).concat(Object.keys(stageCounts).filter(s => stageOrder.indexOf(s) === -1));
+  if (el('pipelineByStage')) {
+    el('pipelineByStage').innerHTML = stageKeys.map(s => {
+      const n = stageCounts[s] || 0;
+      const pct = Math.round(n / maxStage * 100);
+      return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;">' +
+        '<div style="width:120px;flex-shrink:0;color:var(--text-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHtml(s) + '</div>' +
+        '<div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:var(--primary);border-radius:4px;"></div></div>' +
+        '<div style="width:28px;text-align:right;font-weight:600;">' + n + '</div></div>';
+    }).join('') || '<p class="empty-state">No data</p>';
+  }
+  if (el('pipelineCard')) el('pipelineCard').style.display = '';
+
+  // Priority
+  const prioOrder = ['Critical','High','Medium','Low'];
+  const prioCounts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+  companies.forEach(c => {
+    const p = companyPriorityLabel(c);
+    if (prioCounts[p] !== undefined) prioCounts[p]++;
+  });
+  const prioColors = { Critical: 'var(--danger)', High: 'var(--warning)', Medium: 'var(--info)', Low: '#9e9e9e' };
+  if (el('pipelineByPriority')) {
+    el('pipelineByPriority').innerHTML = prioOrder.map(p =>
+      '<div style="background:var(--bg);border-radius:var(--radius-sm);padding:12px;border-left:4px solid ' + prioColors[p] + ';">' +
+      '<div style="font-size:20px;font-weight:700;color:' + prioColors[p] + ';">' + prioCounts[p] + '</div>' +
+      '<div style="font-size:12px;color:var(--text-light);">' + p + '</div></div>'
+    ).join('');
+  }
+  if (el('priorityCard')) el('priorityCard').style.display = '';
+
+  // Top 10
+  const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
+  const potMap = { High: 30, Medium: 10, Low: 3 };
+  const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
+  const scored = companies.map(c => {
+    let score = parseFloat(c.priority_score);
+    if (isNaN(score)) {
+      const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
+      const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
+      const val = parseFloat(c.est_value) || 0;
+      const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
+      score = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
+    }
+    return { c: c, score: score };
+  }).sort(function(a, b) { return b.score - a.score; }).slice(0, 10);
+
+  if (el('top10List')) {
+    el('top10List').innerHTML = scored.map(function(item, i) {
+      const c = item.c;
+      const p = companyPriorityLabel(c) || (item.score >= 65 ? 'Critical' : item.score >= 45 ? 'High' : item.score >= 25 ? 'Medium' : 'Low');
+      const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
+        '<div style="width:22px;height:22px;border-radius:50%;background:var(--primary);color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;">' + (i + 1) + '</div>' +
+        '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(c.name || '') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-light);">' + escapeHtml(c.sales_stage || '') + '</div></div>' +
+        '<div style="text-align:right;"><div style="font-weight:700;font-size:14px;">' + item.score + '</div>' +
+        '<div style="font-size:10px;color:var(--text-light);">' + escapeHtml(p) + '</div></div></div>';
+    }).join('') || '<p class="empty-state">No data</p>';
+  }
+  if (el('top10Card')) el('top10Card').style.display = '';
+
+  // Other metrics
+  const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
+  const weekEnd = todayUTC + 7 * 86400000;
+  const followThisWeek = companies.filter(c => {
+    if (isClosedStage(c.sales_stage)) return false;
+    const fu = excelSerialToDate(c.next_follow_up_date);
+    if (!fu) return false;
+    const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+    return fuUTC >= todayUTC && fuUTC <= weekEnd;
+  }).length;
+  const notVisited60 = companies.filter(c => {
+    const d = companyDaysSince(c);
+    return d != null && d >= 60;
+  }).length;
+  const won = companies.filter(c => String(c.sales_stage || '') === 'Won').length;
+  const lost = companies.filter(c => String(c.sales_stage || '') === 'Lost').length;
+  const winRate = (won + lost) > 0 ? Math.round(won / (won + lost) * 100) : 0;
+  const daysVals = companies.map(c => companyDaysSince(c)).filter(d => d != null && !isNaN(d));
+  const avgDays = daysVals.length ? (daysVals.reduce(function(a, b) { return a + b; }, 0) / daysVals.length).toFixed(1) : '—';
+  const ages = companies.map(c => {
+    const first = excelSerialToDate(c.first_contact_date);
+    if (!first) return null;
+    return Math.round((todayUTC - Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), first.getUTCDate())) / 86400000);
+  }).filter(d => d != null && d >= 0);
+  const avgAge = ages.length ? (ages.reduce(function(a, b) { return a + b; }, 0) / ages.length).toFixed(1) : '—';
+
+  const otherRows = [
+    ['Proposals Outstanding', proposals],
+    ['Follow-up This Week', followThisWeek],
+    ['Not Visited 60+ Days', notVisited60],
+    ['Won / Lost', won + ' / ' + lost],
+    ['Win Rate', winRate + '%'],
+    ['Avg Days Since Visit', avgDays],
+    ['Avg Opportunity Age', avgAge]
+  ];
+  if (el('otherMetrics')) {
+    el('otherMetrics').innerHTML = otherRows.map(function(row) {
+      return '<div style="background:var(--bg);padding:10px;border-radius:var(--radius-sm);">' +
+        '<div style="font-size:11px;color:var(--text-light);">' + row[0] + '</div>' +
+        '<div style="font-size:16px;font-weight:700;margin-top:2px;">' + row[1] + '</div></div>';
+    }).join('');
+  }
+  if (el('otherMetricsCard')) el('otherMetricsCard').style.display = '';
+
+  // ===== Charts =====
+  chartDefaults();
+  const stageLabels = stageKeys;
+  const stageData = stageLabels.map(s => stageCounts[s] || 0);
+  destroySbaChart('stage');
+  if (typeof Chart !== 'undefined' && el('chartStage')) {
+    sbaCharts.stage = new Chart(el('chartStage'), {
+      type: 'bar',
+      data: {
+        labels: stageLabels.map(s => s.length > 14 ? s.slice(0, 12) + '…' : s),
+        datasets: [{
+          label: 'Companies',
+          data: stageData,
+          backgroundColor: 'rgba(15, 76, 129, 0.75)',
+          borderColor: 'rgba(15, 76, 129, 1)',
+          borderWidth: 1,
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        onHover: function(e, els) { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            enabled: true,
+            callbacks: {
+              title: function(items) { return stageLabels[items[0].dataIndex]; },
+              label: function(ctx) {
+                const n = ctx.parsed.y || 0;
+                const pct = total ? Math.round(n / total * 100) : 0;
+                return ' ' + n + ' companies (' + pct + '% of pipeline)';
+              },
+              afterBody: function(items) {
+                const stage = stageLabels[items[0].dataIndex];
+                const sample = companies.filter(function(c) { return String(c.sales_stage || '').trim() === stage; }).slice(0, 3);
+                if (!sample.length) return '';
+                return ['', 'Examples:'].concat(sample.map(function(c) { return '• ' + (c.name || ''); }));
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { maxRotation: 45, minRotation: 30, autoSkip: false, font: { size: 9 } }, grid: { display: false } },
+          y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(0,0,0,0.05)' } }
+        }
+      }
+    });
+  }
+
+  destroySbaChart('priority');
+  if (typeof Chart !== 'undefined' && el('chartPriority')) {
+    sbaCharts.priority = new Chart(el('chartPriority'), {
+      type: 'doughnut',
+      data: {
+        labels: prioOrder,
+        datasets: [{
+          data: prioOrder.map(p => prioCounts[p]),
+          backgroundColor: ['#dc3545', '#fd7e14', '#17a2b8', '#9e9e9e'],
+          borderWidth: 2,
+          borderColor: '#fff'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        cutout: '58%',
+        interaction: { mode: 'nearest', intersect: true },
+        onHover: function(e, els) { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        plugins: {
+          legend: { position: 'bottom', labels: { font: { size: 10 } } },
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const n = ctx.parsed || 0;
+                const pct = total ? Math.round(n / total * 100) : 0;
+                return ' ' + ctx.label + ': ' + n + ' (' + pct + '%)';
+              },
+              afterBody: function(items) {
+                const label = items[0].label;
+                const sample = companies.filter(function(c) { return companyPriorityLabel(c) === label; }).slice(0, 3);
+                if (!sample.length) return '';
+                return ['', 'Examples:'].concat(sample.map(function(c) { return '• ' + (c.name || ''); }));
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  // Visits / last-contact by month (last 8 months)
+  const monthCounts = {};
+  companies.forEach(c => {
+    const d = excelSerialToDate(c.last_contact_date) || excelSerialToDate(c.first_contact_date);
+    const k = monthKey(d);
+    if (k) monthCounts[k] = (monthCounts[k] || 0) + 1;
+  });
+  const sortedMonths = Object.keys(monthCounts).sort();
+  const lastMonths = sortedMonths.slice(-8);
+  destroySbaChart('visits');
+  if (typeof Chart !== 'undefined' && el('chartVisits') && lastMonths.length) {
+    sbaCharts.visits = new Chart(el('chartVisits'), {
+      type: 'line',
+      data: {
+        labels: lastMonths.map(monthLabel),
+        datasets: [{
+          label: 'Contacts (by last contact month)',
+          data: lastMonths.map(k => monthCounts[k]),
+          borderColor: '#0f4c81',
+          backgroundColor: 'rgba(15, 76, 129, 0.12)',
+          fill: true,
+          tension: 0.35,
+          pointRadius: 4,
+          pointBackgroundColor: '#0f4c81'
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        onHover: function(e, els) { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        plugins: {
+          legend: { display: true, position: 'top' },
+          tooltip: {
+            callbacks: {
+              title: function(items) { return items[0].label; },
+              label: function(ctx) {
+                return ' ' + ctx.parsed.y + ' companies contacted';
+              },
+              afterBody: function(items) {
+                const mk = lastMonths[items[0].dataIndex];
+                const sample = companies.filter(function(c) {
+                  const d = excelSerialToDate(c.last_contact_date) || excelSerialToDate(c.first_contact_date);
+                  return monthKey(d) === mk;
+                }).slice(0, 4);
+                if (!sample.length) return '';
+                return ['', 'Sample:'].concat(sample.map(function(c) { return '• ' + (c.name || ''); }));
+              }
+            }
+          }
+        },
+        scales: {
+          y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          x: { grid: { display: false } }
+        }
+      }
+    });
+  }
+
+  // Score distribution histogram
+  const buckets = { '0-24': 0, '25-44': 0, '45-64': 0, '65-100': 0 };
+  scored.forEach(function() {}); // scored is top 10 only — use all companies
+  companies.forEach(c => {
+    let score = parseFloat(c.priority_score);
+    if (isNaN(score)) {
+      const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
+      const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
+      const val = parseFloat(c.est_value) || 0;
+      const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
+      score = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
+    }
+    if (score >= 65) buckets['65-100']++;
+    else if (score >= 45) buckets['45-64']++;
+    else if (score >= 25) buckets['25-44']++;
+    else buckets['0-24']++;
+  });
+  destroySbaChart('score');
+  if (typeof Chart !== 'undefined' && el('chartScore')) {
+    sbaCharts.score = new Chart(el('chartScore'), {
+      type: 'bar',
+      data: {
+        labels: ['Low 0–24', 'Med 25–44', 'High 45–64', 'Critical 65+'],
+        datasets: [{
+          label: 'Companies by score',
+          data: [buckets['0-24'], buckets['25-44'], buckets['45-64'], buckets['65-100']],
+          backgroundColor: ['#9e9e9e', '#17a2b8', '#fd7e14', '#dc3545'],
+          borderRadius: 6
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        onHover: function(e, els) { e.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: function(items) { return items[0].label + ' priority score'; },
+              label: function(ctx) {
+                const n = ctx.parsed.x || 0;
+                const pct = total ? Math.round(n / total * 100) : 0;
+                return ' ' + n + ' companies (' + pct + '%)';
+              }
+            }
+          }
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          y: { grid: { display: false } }
+        }
+      }
+    });
+  }
+  if (el('trendCard')) el('trendCard').style.display = '';
+
+    // Recent
+  const recent = companies.slice().sort(function(a, b) { return (b._rowIndex || 0) - (a._rowIndex || 0); }).slice(0, 5);
+  if (el('recentActivity')) {
+    el('recentActivity').innerHTML = recent.map(function(c) {
+      const p = companyPriorityLabel(c) || c.relationship_level || '';
+      const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+      return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
+        '<div><div style="font-weight:600;font-size:14px;">' + escapeHtml(c.name || 'Unnamed') + '</div>' +
+        '<div style="font-size:12px;color:var(--text-light);">' + escapeHtml(c.industry || '') + (c.sales_stage ? ' • ' + escapeHtml(c.sales_stage) : '') + '</div></div>' +
+        '<span class="badge badge-' + escapeHtml(companyTempBucket(c)) + '">' + escapeHtml(p) + '</span></div>';
+    }).join('') || '<p class="empty-state">No companies</p>';
+  }
+  if (el('recentActivityCard')) el('recentActivityCard').style.display = '';
+  if (el('kpiSection')) el('kpiSection').style.display = '';
 }
 
 // ==================== COMPANIES LIST ====================
