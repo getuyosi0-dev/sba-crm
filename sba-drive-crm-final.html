@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v6</title>
+<title>SBA Drive CRM v7</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -423,7 +423,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba6-2026-08-16-col0-fix';
+const SBA_APP_VERSION = 'sba7-2026-08-16-excel-dates';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1177,7 +1177,15 @@ function editCompany(rowIndex, sheetName) {
   ];
 
   document.getElementById('editForm').innerHTML = fields.map(f => {
-    const val = company[f.key] != null ? company[f.key] : '';
+    let val = company[f.key] != null ? company[f.key] : '';
+    // Excel stores dates as serial numbers — convert for <input type="date">
+    if (f.type === 'date' && typeof val === 'number' && val > 20000) {
+      const utc = new Date(Date.UTC(1899, 11, 30) + val * 86400000);
+      const y = utc.getUTCFullYear();
+      const mo = String(utc.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(utc.getUTCDate()).padStart(2, '0');
+      val = y + '-' + mo + '-' + d;
+    }
     const safeVal = escapeHtml(String(val));
     if (f.type === 'select') {
       return `<div class="form-group"><label class="form-label">${f.label}</label><select class="form-select" id="edit_${f.key}">${f.options.map(o => `<option value="${escapeHtml(o)}" ${String(o)===String(val)?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
@@ -1286,8 +1294,8 @@ function saveCompany() {
   setVal('name', name);
   setVal('industry', g('acIndustry'));
   setVal('contact_person', g('acContact'));
-  setVal('first_contact_date', g('acFirstContact'));
-  setVal('last_contact_date', g('acLastContact'));
+  setVal('first_contact_date', toExcelDateSerial(g('acFirstContact')) ?? g('acFirstContact'));
+  setVal('last_contact_date', toExcelDateSerial(g('acLastContact')) ?? g('acLastContact'));
   const totalC = g('acTotalContacted');
   if (totalC !== '') setVal('total_contacted', parseFloat(totalC) || 0);
   setVal('current_supplier', g('acSupplier'));
@@ -1298,7 +1306,7 @@ function saveCompany() {
   setVal('opportunity_summary', notes);
   const val = parseFloat(g('acValue')) || 0;
   if (val) setVal('est_value', val);
-  setVal('next_follow_up_date', g('acFollowUp'));
+  setVal('next_follow_up_date', toExcelDateSerial(g('acFollowUp')) ?? g('acFollowUp'));
   setVal('relationship_level', g('acRelationship') || 'Warm');
   setVal('sales_owner', g('acOwner') || 'Yosef Getu');
 
@@ -1423,6 +1431,45 @@ function colIndexFromRef(ref) {
 }
 function isNumericLike(val) { return /^-?\d+(\.\d+)?$/.test(String(val).trim()); }
 
+// HTML date inputs yield "YYYY-MM-DD" text. Excel date formulas need serial numbers
+// (days since 1899-12-30). Writing text dates breaks Days-Since-Last-Visit etc.
+function isDateFieldKey(key) {
+  const k = String(key || '').toLowerCase();
+  if (k.indexOf('date') === -1) return false;
+  if (k.indexOf('update') !== -1) return false;
+  return true;
+}
+function toExcelDateSerial(val) {
+  if (val === '' || val === undefined || val === null) return null;
+  if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) return val;
+  const s = String(val).trim();
+  let y, mo, d;
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
+  else {
+    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+    else {
+      const dt = new Date(s);
+      if (isNaN(dt.getTime())) return null;
+      y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
+    }
+  }
+  if (!y || !mo || !d) return null;
+  const utc = Date.UTC(y, mo - 1, d);
+  const epoch = Date.UTC(1899, 11, 30);
+  return Math.round((utc - epoch) / 86400000);
+}
+function coerceValueForExcel(key, val) {
+  if (val === '' || val === undefined || val === null) return val;
+  if (isDateFieldKey(key)) {
+    const serial = toExcelDateSerial(val);
+    if (serial != null) return serial;
+  }
+  return val;
+}
+
+
 // Create an element in the SpreadsheetML namespace so Excel accepts the patched XML.
 function ssEl(doc, localName) {
   try {
@@ -1434,10 +1481,10 @@ function ssEl(doc, localName) {
 
 // Decide whether a value for a given field key should be written as text.
 function shouldForceText(fieldKey, val) {
+  if (isDateFieldKey(fieldKey)) return false; // must stay numeric serial
   if (FORCE_TEXT_FIELDS.has(fieldKey)) return true;
-  // Also force text for any key that looks like a phone / name / status
-  if (/phone|mobile|tel|name|status|stage|priority|industry|location|contact|note|brand|application/i.test(fieldKey)) return true;
-  // Phone-like patterns (leading zero, +, spaces, dashes)
+  if (/phone|mobile|tel|name|status|stage|priority|industry|location|contact|note|brand|application/i.test(fieldKey)
+      && !isDateFieldKey(fieldKey)) return true;
   const s = String(val);
   if (/^[+0]/.test(s) || /[\s\-]/.test(s)) return true;
   return false;
@@ -1757,6 +1804,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
         }
       }
     }
+    if (val !== undefined && val !== null && val !== '') val = coerceValueForExcel(key, val);
     const hasValue = val !== undefined && val !== null && val !== '';
 
     if (!formulaEl && !hasValue) return; // keep row minimal
@@ -1889,11 +1937,12 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
 
     if (cellEl && ssFirst(cellEl, 'f')) return; // formula cell — leave untouched
 
-    const val = values[key];
+    let val = values[key];
     if (val === '' || val === undefined || val === null) {
       if (cellEl) rowEl.removeChild(cellEl);
       return;
     }
+    val = coerceValueForExcel(key, val);
 
     if (!cellEl) {
       cellEl = ssEl(doc, 'c');
