@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v4</title>
+<title>SBA Drive CRM v5</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -423,7 +423,7 @@ let isDirty = false;               // true when there are pendingEdits not yet c
 let lastSavedAt = null;
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba4-2026-08-16-inputs-only';
+const SBA_APP_VERSION = 'sba5-2026-08-16-col0-fix';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -2012,12 +2012,16 @@ async function generateSafeWorkbookBuffer() {
       }
     });
     console.log('[SBA] Sheet "' + sheetName + '" header Excel row', headerExcelRow, 'cols:', Object.keys(headerColMap));
-    if (!headerColMap.company && !headerColMap.name && !headerColMap.company_name) {
+    // Column A is index 0 — must use !== undefined (0 is falsy in JS!)
+    const companyColIdx = headerColMap.company !== undefined ? headerColMap.company
+      : (headerColMap.name !== undefined ? headerColMap.name
+      : (headerColMap.company_name !== undefined ? headerColMap.company_name : undefined));
+    if (companyColIdx === undefined) {
       console.error('[SBA] Header map dump:', headerColMap);
       throw new Error('No Company/Name column found in "' + sheetName + '" — cannot add company. Headers: ' + Object.keys(headerColMap).join(', '));
-    } else {
-      console.log('[SBA] Company column index:', headerColMap.company ?? headerColMap.name ?? headerColMap.company_name);
     }
+    console.log('[SBA] Company column index:', companyColIdx);
+
 
     // Process adds first (extend table sequentially), then edits of existing rows
     const adds = bySheet[sheetName].filter(e => e.type === 'add');
