@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v14</title>
+<title>SBA Drive CRM v16</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -120,6 +120,20 @@ body { padding-bottom: 80px; }
 .toast.success { background: var(--success); }
 .toast.error { background: var(--danger); }
 .toast.warning { background: var(--warning); }
+.save-error-banner {
+  display: none; position: fixed; bottom: 90px; left: 12px; right: 12px; z-index: 320;
+  background: #fff5f5; border: 1px solid var(--danger); border-radius: var(--radius);
+  padding: 12px 14px; box-shadow: var(--shadow); max-width: 640px; margin: 0 auto;
+}
+.save-error-banner.show { display: block; }
+.save-error-banner h4 { color: var(--danger); font-size: 14px; margin: 0 0 6px; }
+.save-error-banner pre {
+  margin: 0 0 10px; font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+  max-height: 140px; overflow: auto; color: var(--text);
+}
+.save-error-banner .banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.save-error-banner .banner-actions button { width: auto; padding: 8px 12px; font-size: 13px; }
 @keyframes slideDown { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
 .empty-state { text-align: center; padding: 40px 20px; color: var(--text-light); }
 .login-screen { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 24px; text-align: center; background: linear-gradient(135deg, var(--primary) 0%, var(--primary-dark) 100%); color: white; }
@@ -213,6 +227,16 @@ body { padding-bottom: 80px; }
 </header>
 
 <div class="toast-container" id="toastContainer"></div>
+<div class="save-error-banner" id="saveErrorBanner" role="alert">
+  <h4>Could not save to Google Drive</h4>
+  <pre id="saveErrorDetails"></pre>
+  <div class="banner-actions">
+    <button class="btn btn-primary btn-sm" type="button" onclick="copySaveError()">Copy error</button>
+    <button class="btn btn-secondary btn-sm" type="button" onclick="retrySaveToDrive()">Retry save</button>
+    <button class="btn btn-secondary btn-sm" type="button" onclick="hideSaveErrorBanner()">Dismiss</button>
+  </div>
+</div>
+
 <div class="save-indicator" id="saveIndicator"><span class="loading"></span> Saving to Drive...</div>
 
 <!-- DASHBOARD -->
@@ -454,9 +478,14 @@ let pendingEdits = [];             // [{type:'add', sheetName, values, _uiRowInd
 let recentActivityFeed = [];       // session add/edit activity for Recent list
 let isDirty = false;               // true when there are pendingEdits not yet confirmed saved to Drive
 let lastSavedAt = null;
+let autoSaveTimer = null;
+let autoSaveInFlight = false;
+let lastSaveErrorText = '';
+const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
+
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba14-2026-08-16-sheets-activity';
+const SBA_APP_VERSION = 'sba16-2026-08-16-autosave';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -741,7 +770,7 @@ function loadFileFromDrive(fileId) {
       const data = new Uint8Array(buf);
       // SheetJS is used ONLY to populate the CRM's display data (lists,
       // search, dashboard counts) from here on — never written back to Drive.
-      workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true });
+      workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true, cellDates: true });
       showToast('File loaded: ' + currentFile.name, 'success');
       updateFileUI();
       updateDirtyIndicator();
@@ -755,28 +784,36 @@ function loadFileFromDrive(fileId) {
 }
 
 // ==================== SAVE TO DRIVE ====================
-async function saveToDrive() {
-  if (!originalArrayBuffer || !currentFile) { showToast('No file loaded', 'error'); return; }
-  if (!accessToken) { showToast('Please sign in first', 'error'); return; }
+async function saveToDrive(options) {
+  const opts = options || {};
+  const silent = !!opts.silent; // background auto-save: no success toast
+  if (!originalArrayBuffer || !currentFile) {
+    if (!silent) showToast('No file loaded', 'error');
+    return false;
+  }
+  if (!accessToken) {
+    if (!silent) showToast('Please sign in first', 'error');
+    else showSaveErrorBanner('Not signed in to Google. Open Drive tab and sign in, then Retry save.');
+    return false;
+  }
+  if (autoSaveInFlight) return false;
+  autoSaveInFlight = true;
   showSaveIndicator(true);
+  updateDirtyIndicator();
 
   let outBuf;
   try {
     outBuf = await generateSafeWorkbookBuffer();
   } catch (err) {
     console.error('Workbook generation/validation failed, Drive file left untouched:', err);
-    showSaveResult(false, 'Save blocked — ' + err.message + ' (your Drive file was NOT changed; your edits are still here, safe to retry)');
-    return;
+    autoSaveInFlight = false;
+    const detail = 'Save blocked (Drive file NOT changed).\n\n' +
+      (err && err.message ? err.message : String(err)) +
+      '\n\nYour edits are still in the app. You can Retry save or Download the file.';
+    showSaveResult(false, detail, silent);
+    return false;
   }
 
-  // Google Drive's multipart upload endpoint expects RFC2387
-  // `multipart/related` — two parts (JSON metadata, then the file bytes)
-  // separated by a boundary, with Content-Type: multipart/related on the
-  // outer request. The previous code built the body with the browser's
-  // FormData object, which produces `multipart/form-data` instead — a
-  // different format that Drive's uploadType=multipart endpoint does not
-  // accept. That mismatch was the actual cause of every save failing. This
-  // builds the multipart/related body by hand instead.
   const boundary = 'sba_drive_boundary_' + Date.now().toString(36);
   const metadata = { name: currentFile.name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
   const body = new Blob([
@@ -799,19 +836,78 @@ async function saveToDrive() {
       throw new Error(reason);
     }
     const result = await res.json();
-    // Confirm Drive actually updated the SAME file we selected — not a new one.
     if (!result.id || result.id !== currentFile.id) {
       throw new Error('Drive response did not confirm the same file was updated (got id "' + result.id + '", expected "' + currentFile.id + '").');
     }
     console.log('Drive upload confirmed:', result);
-    originalArrayBuffer = outBuf; // the saved bytes are now the new baseline
+    originalArrayBuffer = outBuf;
     pendingEdits = [];
+    isDirty = false;
     lastSavedAt = new Date();
-    showSaveResult(true);
+    hideSaveErrorBanner();
+    showSaveResult(true, null, silent);
+    autoSaveInFlight = false;
+    return true;
   } catch (err) {
     console.error('Save error:', err);
-    showSaveResult(false, 'Save failed — changes are still local. ' + err.message);
+    autoSaveInFlight = false;
+    const detail = 'Save failed — changes are still local in the app (Drive not updated).\n\n' +
+      (err && err.message ? err.message : String(err)) +
+      '\n\nTime: ' + new Date().toISOString() +
+      '\nFile: ' + (currentFile && currentFile.name ? currentFile.name : '') +
+      '\nFile ID: ' + (currentFile && currentFile.id ? currentFile.id : '') +
+      '\nPending edits: ' + pendingEdits.length;
+    showSaveResult(false, detail, silent);
+    return false;
   }
+}
+
+function scheduleAutoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(function() {
+    autoSaveTimer = null;
+    if (!isDirty || pendingEdits.length === 0) return;
+    if (!currentFile || !accessToken || !originalArrayBuffer) return;
+    saveToDrive({ silent: true });
+  }, AUTO_SAVE_DELAY_MS);
+}
+
+function showSaveErrorBanner(detail) {
+  lastSaveErrorText = detail || '';
+  const banner = document.getElementById('saveErrorBanner');
+  const pre = document.getElementById('saveErrorDetails');
+  if (pre) pre.textContent = lastSaveErrorText;
+  if (banner) banner.classList.add('show');
+}
+function hideSaveErrorBanner() {
+  const banner = document.getElementById('saveErrorBanner');
+  if (banner) banner.classList.remove('show');
+}
+function copySaveError() {
+  const text = lastSaveErrorText || (document.getElementById('saveErrorDetails') && document.getElementById('saveErrorDetails').textContent) || '';
+  if (!text) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showToast('Error copied — paste it here in chat', 'success');
+    }).catch(function() {
+      fallbackCopyText(text);
+    });
+  } else {
+    fallbackCopyText(text);
+  }
+}
+function fallbackCopyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); showToast('Error copied — paste it here in chat', 'success'); }
+  catch (e) { showToast('Copy failed — select the error text manually', 'warning'); }
+  document.body.removeChild(ta);
+}
+function retrySaveToDrive() {
+  hideSaveErrorBanner();
+  saveToDrive({ silent: false });
 }
 
 async function downloadFile() {
@@ -855,21 +951,29 @@ function showSaveIndicator(saving) {
 
 // Final saving outcome — only ever called after we've genuinely confirmed
 // success or failure from Drive's response (never optimistically).
-function showSaveResult(success, message) {
+function showSaveResult(success, message, silent) {
   const el = document.getElementById('saveIndicator');
   if (success) {
-    el.className = 'save-indicator show';
-    const t = lastSavedAt.toTimeString().slice(0, 5);
-    el.textContent = 'Saved successfully at ' + t;
-    showToast('Saved to Google Drive', 'success');
+    if (el) {
+      el.className = 'save-indicator show';
+      el.style.background = '';
+      const ts = lastSavedAt ? lastSavedAt.toTimeString().slice(0, 5) : '';
+      el.textContent = 'Saved to Drive' + (ts ? ' at ' + ts : '');
+      setTimeout(function() { el.className = 'save-indicator'; }, silent ? 1800 : 2500);
+    }
+    if (!silent) showToast('Saved to Google Drive', 'success');
   } else {
-    el.className = 'save-indicator show';
-    el.style.background = 'var(--danger)';
-    el.textContent = 'Save failed';
-    showToast(message || 'Save failed — changes are still local', 'error');
+    if (el) {
+      el.className = 'save-indicator show';
+      el.style.background = 'var(--danger)';
+      el.textContent = 'Save failed';
+      setTimeout(function() { el.className = 'save-indicator'; el.style.background = ''; }, 4000);
+    }
+    showSaveErrorBanner(message || 'Save failed — changes are still local');
+    // Always surface failures (even silent auto-save)
+    showToast('Save to Drive failed — see error banner', 'error');
   }
   updateDirtyIndicator();
-  setTimeout(() => { el.className = 'save-indicator'; el.style.background = ''; }, 4000);
 }
 
 // Dirty-state badge: never claim "Saved" while there are edits Drive hasn't
@@ -877,8 +981,11 @@ function showSaveResult(success, message) {
 function updateDirtyIndicator() {
   const el = document.getElementById('dirtyIndicator');
   if (!el) return;
-  if (isDirty) {
-    el.textContent = 'Unsaved changes';
+  if (autoSaveInFlight) {
+    el.textContent = 'Saving to Drive…';
+    el.style.color = 'var(--warning)';
+  } else if (isDirty) {
+    el.textContent = 'Unsaved changes — auto-save pending';
     el.style.color = 'var(--warning)';
   } else if (lastSavedAt) {
     el.textContent = 'Saved to Drive at ' + lastSavedAt.toTimeString().slice(0, 5);
@@ -886,6 +993,11 @@ function updateDirtyIndicator() {
   } else {
     el.textContent = '';
   }
+}
+function markDirtyAndScheduleSave() {
+  isDirty = true;
+  updateDirtyIndicator();
+  scheduleAutoSave();
 }
 
 // ==================== NAVIGATION ====================
@@ -1771,9 +1883,8 @@ function saveCompanyEdit() {
   } else {
     pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
   }
-  isDirty = true;
   editingIsPendingAdd = false;
-  updateDirtyIndicator();
+  markDirtyAndScheduleSave();
   logActivity({
     type: 'update',
     name: (editValues.name || editValues.company || document.getElementById('editCompanyName').textContent || 'Updated'),
@@ -1783,7 +1894,7 @@ function saveCompanyEdit() {
     rowIndex: editingCompanyIndex
   });
 
-  showToast('Company updated — unsaved. Tap "Save to Drive" to persist.', 'success');
+  showToast('Company updated — saving to Drive in the background…', 'success');
   navigate('companies');
   renderCompanies();
   renderDashboard();
@@ -1903,8 +2014,7 @@ function saveCompany() {
     _uiRowIndex: uiRowIndex,
     preferredExcelRow: preferredExcelRowClamped
   });
-  isDirty = true;
-  updateDirtyIndicator();
+  markDirtyAndScheduleSave();
   logActivity({
     type: 'add',
     name: name,
@@ -1919,7 +2029,7 @@ function saveCompany() {
     const el = document.getElementById(id); if (el) el.value = '';
   });
 
-  showToast('Company added — unsaved. Tap "Save to Drive" to persist.', 'success');
+  showToast('Company added — saving to Drive in the background…', 'success');
   renderCompanies();
   renderDashboard();
 }
@@ -2835,7 +2945,7 @@ async function validateGeneratedWorkbook(buf, expectations) {
   // Second check: re-open with SheetJS and confirm the company appears in cell data
   if (expectations.addedCompanyNames && expectations.addedCompanyNames.length) {
     try {
-      const reWb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      const reWb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
       for (const name of expectations.addedCompanyNames) {
         let foundInSheetJS = false;
         for (const sn of reWb.SheetNames) {
@@ -2894,23 +3004,36 @@ async function validateGeneratedWorkbook(buf, expectations) {
 // ==================== SHEETS VIEW ====================
 function formatSheetCell(val) {
   if (val === null || val === undefined || val === '') return '';
-  if (val instanceof Date && !isNaN(val)) {
-    const y = val.getFullYear();
-    const mo = String(val.getMonth() + 1).padStart(2, '0');
-    const d = String(val.getDate()).padStart(2, '0');
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    const y = val.getUTCFullYear ? val.getUTCFullYear() : val.getFullYear();
+    const mo = String((val.getUTCMonth ? val.getUTCMonth() : val.getMonth()) + 1).padStart(2, '0');
+    const d = String(val.getUTCDate ? val.getUTCDate() : val.getDate()).padStart(2, '0');
+    // Prefer local calendar date display for CRM dates
+    const ly = val.getFullYear();
+    const lmo = String(val.getMonth() + 1).padStart(2, '0');
+    const ld = String(val.getDate()).padStart(2, '0');
+    return ly + '-' + lmo + '-' + ld;
+  }
+  // Excel serial (number or numeric string)
+  const num = typeof val === 'number' ? val : (/^\d+(\.\d+)?$/.test(String(val).trim()) ? parseFloat(val) : NaN);
+  if (!isNaN(num) && num > 20000 && num < 100000) {
+    const dt = new Date(Date.UTC(1899, 11, 30) + Math.round(num) * 86400000);
+    const y = dt.getUTCFullYear();
+    const mo = String(dt.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(dt.getUTCDate()).padStart(2, '0');
     return y + '-' + mo + '-' + d;
   }
-  if (typeof val === 'number' && val > 20000 && val < 100000 && Number.isInteger(val)) {
-    // likely excel serial date
-    try {
-      const dt = new Date(Date.UTC(1899, 11, 30) + val * 86400000);
-      const y = dt.getUTCFullYear();
-      const mo = String(dt.getUTCMonth() + 1).padStart(2, '0');
-      const d = String(dt.getUTCDate()).padStart(2, '0');
-      return y + '-' + mo + '-' + d;
-    } catch (e) { return String(val); }
-  }
+  // Probabilities stored as 0.05 → show 5% when header context not available — leave raw
   return String(val);
+}
+
+function isSheetRowEmpty(row, maxCols) {
+  if (!row) return true;
+  for (let c = 0; c < maxCols; c++) {
+    const v = row[c];
+    if (v !== undefined && v !== null && String(v).trim() !== '') return false;
+  }
+  return true;
 }
 
 function renderSheets() {
@@ -2919,10 +3042,16 @@ function renderSheets() {
     document.getElementById('sheetContent').innerHTML = '<p class="empty-state">No file loaded</p>';
     return;
   }
-  // Prefer Sales Tracker as default sheet when opening Sheets view
+  // Default to Sales Tracker when available
+  if (!window._sheetsTabChosen) {
+    const idx = workbook.SheetNames.findIndex(function(n) {
+      return /sales\s*tracker/i.test(n) || /master/i.test(n);
+    });
+    if (idx >= 0) currentSheet = idx;
+  }
   if (workbook.SheetNames[currentSheet] == null) currentSheet = 0;
   const tabs = workbook.SheetNames.map(function(name, i) {
-    return '<button class="sheet-tab ' + (i === currentSheet ? 'active' : '') + '" onclick="showSheet(' + i + ')">' + escapeHtml(name) + '</button>';
+    return '<button class="sheet-tab ' + (i === currentSheet ? 'active' : '') + '" onclick="window._sheetsTabChosen=true;showSheet(' + i + ')">' + escapeHtml(name) + '</button>';
   }).join('');
   document.getElementById('sheetTabs').innerHTML = tabs;
   showSheet(currentSheet);
@@ -2939,42 +3068,99 @@ function showSheet(index) {
     document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Sheet not found</p>';
     return;
   }
-  // Use sheet_to_json with blankrows so structure is preserved; defval keeps columns aligned
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: false, raw: false });
+
+  // raw:true keeps numbers; we format dates ourselves. Prefer dense AOA from range.
+  let data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', blankrows: true, raw: true });
   if (!data || data.length === 0) {
     document.getElementById('sheetContent').innerHTML = '<p class="empty-state">Empty sheet</p>';
     return;
   }
-  // Column count = max width across rows (not just row 0)
+
+  // Max columns from used range / rows
   let maxCols = 0;
   for (let r = 0; r < data.length; r++) {
     if (data[r] && data[r].length > maxCols) maxCols = data[r].length;
   }
-  if (maxCols === 0) maxCols = 1;
-  // Cap display size for mobile performance; allow more rows/cols than before
-  const maxRows = Math.min(data.length, 200);
-  const showCols = Math.min(maxCols, 25);
+  // Cap trailing empty columns
+  while (maxCols > 1) {
+    let any = false;
+    for (let r = 0; r < Math.min(data.length, 30); r++) {
+      const v = data[r] && data[r][maxCols - 1];
+      if (v !== undefined && v !== null && String(v).trim() !== '') { any = true; break; }
+    }
+    if (any) break;
+    maxCols--;
+  }
+  if (maxCols < 1) maxCols = 1;
+
+  const isSalesTracker = /sales\s*tracker/i.test(sheetName) || /master/i.test(sheetName);
+  // For Sales Tracker: keep header row + rows with a company name in col A; stop at Legend / long blank streak
+  let viewRows = data;
+  if (isSalesTracker && data.length > 1) {
+    const kept = [data[0]];
+    let blankStreak = 0;
+    for (let r = 1; r < data.length; r++) {
+      const row = data[r] || [];
+      const name = row[0] !== undefined && row[0] !== null ? String(row[0]).trim() : '';
+      if (!name) {
+        blankStreak++;
+        if (blankStreak >= 3) break;
+        continue;
+      }
+      blankStreak = 0;
+      if (/^legend$/i.test(name) || /^notes?$/i.test(name) || name.indexOf('——') === 0) break;
+      kept.push(row);
+    }
+    viewRows = kept;
+  } else {
+    // Other sheets: drop trailing fully-empty rows
+    let last = viewRows.length - 1;
+    while (last > 0 && isSheetRowEmpty(viewRows[last], maxCols)) last--;
+    viewRows = viewRows.slice(0, last + 1);
+  }
+
+  const maxRows = Math.min(viewRows.length, 500);
+  const showCols = Math.min(maxCols, 30);
+
+  // Detect date columns from header text
+  const header = viewRows[0] || [];
+  const dateCols = {};
+  for (let c = 0; c < showCols; c++) {
+    const h = String(header[c] || '').toLowerCase();
+    if (h.indexOf('date') !== -1) dateCols[c] = true;
+  }
 
   let html = '<div style="margin-bottom:8px;font-size:12px;color:var(--text-light);">' +
-    escapeHtml(sheetName) + ' — showing ' + Math.min(maxRows, data.length) + ' of ' + data.length + ' rows, ' +
-    showCols + ' of ' + maxCols + ' columns</div>';
+    escapeHtml(sheetName) + ' — ' + Math.min(maxRows, viewRows.length) + ' rows';
+  if (viewRows.length !== data.length) html += ' (filtered from ' + data.length + ' sheet rows)';
+  html += ', ' + showCols + ' columns</div>';
   html += '<div style="overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:var(--radius-sm);-webkit-overflow-scrolling:touch;">';
   html += '<table style="width:max-content;min-width:100%;border-collapse:collapse;font-size:12px;">';
   for (let r = 0; r < maxRows; r++) {
     html += '<tr>';
     for (let c = 0; c < showCols; c++) {
-      const raw = data[r] && data[r][c] !== undefined ? data[r][c] : '';
-      const val = escapeHtml(formatSheetCell(raw));
+      const raw = viewRows[r] && viewRows[r][c] !== undefined ? viewRows[r][c] : '';
+      let display;
       if (r === 0) {
-        html += '<th style="background:var(--primary);color:white;padding:8px 10px;text-align:left;font-size:11px;white-space:nowrap;position:sticky;top:0;z-index:2;">' + val + '</th>';
+        display = escapeHtml(String(raw));
+      } else if (dateCols[c]) {
+        display = escapeHtml(formatSheetCell(raw));
+      } else if (typeof raw === 'number' && raw > 20000 && raw < 100000 && Number.isInteger(raw)) {
+        // serial-looking number outside date header — still format as date if in CRM date range
+        display = escapeHtml(formatSheetCell(raw));
       } else {
-        html += '<td style="padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="' + val + '">' + val + '</td>';
+        display = escapeHtml(String(raw === undefined || raw === null ? '' : raw));
+      }
+      if (r === 0) {
+        html += '<th style="background:var(--primary);color:white;padding:8px 10px;text-align:left;font-size:11px;white-space:nowrap;position:sticky;top:0;z-index:2;">' + display + '</th>';
+      } else {
+        html += '<td style="padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;" title="' + display + '">' + display + '</td>';
       }
     }
     html += '</tr>';
   }
-  if (data.length > maxRows) {
-    html += '<tr><td colspan="' + showCols + '" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">… ' + (data.length - maxRows) + ' more rows</td></tr>';
+  if (viewRows.length > maxRows) {
+    html += '<tr><td colspan="' + showCols + '" style="padding:12px;text-align:center;color:var(--text-light);font-size:12px;">… ' + (viewRows.length - maxRows) + ' more rows</td></tr>';
   }
   html += '</table></div>';
   document.getElementById('sheetContent').innerHTML = html;
@@ -3142,7 +3328,7 @@ async function runWorkbookIntegrityTest() {
 
     // Reload with SheetJS
     try {
-      const re = XLSX.read(new Uint8Array(outBuf), { type: 'array' });
+      const re = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellDates: true });
       const sheet = re.Sheets[targetName] || re.Sheets[re.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
       const foundInSheetJS = rows.some(r => r.some(c => String(c).indexOf('SBA_TEST_') !== -1));
