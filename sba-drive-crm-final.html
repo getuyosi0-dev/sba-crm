@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v21</title>
+<title>SBA Drive CRM v25</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -211,6 +211,7 @@ body { padding-bottom: 80px; }
     <a href="#" class="nav-link active" onclick="navigate('dashboard')">Dashboard</a>
     <a href="#" class="nav-link" onclick="navigate('companies')">Companies</a>
     <a href="#" class="nav-link" onclick="navigate('sheets')">Sheets</a>
+    <a href="#" class="nav-link" onclick="navigate('weekly')">Weekly</a>
     <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
   </div>
   <div class="drive-status disconnected" id="driveStatus">
@@ -232,6 +233,10 @@ body { padding-bottom: 80px; }
   <pre id="saveErrorDetails"></pre>
   <div class="banner-actions">
     <button class="btn btn-primary btn-sm" type="button" onclick="copySaveError()">Copy error</button>
+  <button class="nav-item" onclick="navigate('weekly')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+    Weekly
+  </button>
     <button class="btn btn-secondary btn-sm" type="button" onclick="retrySaveToDrive()">Retry save</button>
     <button class="btn btn-secondary btn-sm" type="button" onclick="hideSaveErrorBanner()">Dismiss</button>
   </div>
@@ -316,6 +321,10 @@ body { padding-bottom: 80px; }
     <button class="qa-btn" onclick="navigate('companies')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>View All
     </button>
+    <button class="qa-btn secondary" onclick="navigate('weekly')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+      Weekly Report
+    </button>
     <button class="qa-btn secondary" onclick="navigate('sheets')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
     </button>
@@ -369,7 +378,31 @@ body { padding-bottom: 80px; }
 </div>
 
 <!-- DRIVE FILES -->
+
+<div class="screen" id="screen-weekly">
+  <div class="card">
+    <div class="card-title">Weekly Report</div>
+    <p style="font-size:13px;color:var(--text-light);margin:0 0 12px;">
+      Week = <strong>Friday → Thursday</strong>. Freezes <strong>Thursday 18:00</strong>.
+      Open the app <strong>Thursday after 18:00 or Friday</strong> → report auto-generates and saves to Drive.
+      You can still Generate / Save manually any day.
+    </p>
+    <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
+    <button class="btn" onclick="generateWeeklyReportUI()">Generate / Refresh Report</button>
+    <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
+  </div>
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title" id="lastWeekTitle">Last Week Report</div>
+    <div id="lastWeekTable" style="overflow-x:auto;font-size:13px;"></div>
+  </div>
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title" id="nextWeekTitle">Next Week Plan</div>
+    <div id="nextWeekTable" style="overflow-x:auto;font-size:13px;"></div>
+  </div>
+</div>
+
 <div class="screen" id="screen-drive">
+
   <div class="card">
     <div class="card-title">Your Drive Files</div>
     <button class="btn btn-primary" onclick="showFilePicker()" style="margin-bottom:16px;">Select Excel File</button>
@@ -485,7 +518,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba21-2026-08-17-formulas';
+const SBA_APP_VERSION = 'sba25-2026-08-17-auto-weekly';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -776,6 +809,8 @@ function loadFileFromDrive(fileId) {
       updateDirtyIndicator();
       renderDashboard();
       renderCompanies();
+      // Thursday 18:00+ or Friday → auto weekly report + save
+      setTimeout(function() { maybeAutoWeeklyReport(); }, 800);
     })
     .catch(err => {
       console.error('Load error:', err);
@@ -1008,6 +1043,9 @@ function markDirtyAndScheduleSave() {
 
 // ==================== NAVIGATION ====================
 function navigate(screen) {
+  if (screen === 'weekly' && workbook) {
+    try { generateWeeklyReportUI(); } catch (e) { console.warn(e); }
+  }
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('screen-' + screen).classList.add('active');
@@ -2989,7 +3027,14 @@ async function generateSafeWorkbookBuffer() {
   const sharedStrings = await loadSharedStrings(zip);
 
   const bySheet = {};
-  pendingEdits.forEach(edit => { (bySheet[edit.sheetName] = bySheet[edit.sheetName] || []).push(edit); });
+  const weeklyEdits = [];
+  pendingEdits.forEach(edit => {
+    if (edit.type === 'weeklyReport') { weeklyEdits.push(edit); return; }
+    (bySheet[edit.sheetName] = bySheet[edit.sheetName] || []).push(edit);
+  });
+  for (const we of weeklyEdits) {
+    await applyWeeklyReportToZip(zip, we);
+  }
 
   const addedCompanyNames = [];
   const tableInfoCache = {};
@@ -3271,6 +3316,353 @@ function isSheetRowEmpty(row, maxCols) {
   }
   return true;
 }
+
+
+
+// Auto weekly report when app opened Thursday 18:00+ or Friday
+function shouldAutoRunWeeklyReport(now) {
+  now = now || new Date();
+  const day = now.getDay(); // 0=Sun ... 4=Thu 5=Fri
+  if (day === 5) return true;
+  if (day === 4 && now.getHours() >= 18) return true;
+  return false;
+}
+function weeklyAutoKey(w) {
+  return 'sba_weekly_auto_' + fmtYMD(w.lastThu);
+}
+async function maybeAutoWeeklyReport() {
+  if (!workbook || !originalArrayBuffer || !accessToken || !selectedFileId) return;
+  if (!shouldAutoRunWeeklyReport(new Date())) return;
+  var w;
+  try { w = computeWeeklyReports(new Date()); }
+  catch (e) { console.warn('[SBA] auto weekly compute failed', e); return; }
+  var key = weeklyAutoKey(w);
+  try { if (localStorage.getItem(key) === '1') return; } catch (e) {}
+  try {
+    _weeklyCache = w;
+    var aoa = [];
+    aoa.push(['SBA Ethiopia — Weekly Report']);
+    aoa.push(['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()]);
+    aoa.push(['Week rule', 'Friday → Thursday']);
+    aoa.push(['Auto-saved', 'Opened app Thursday 18:00+ or Friday']);
+    aoa.push([]);
+    aoa.push(['LAST WEEK REPORT', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)]);
+    aoa.push(['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']);
+    w.lastWeek.forEach(function(r) {
+      aoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
+    });
+    if (!w.lastWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
+    aoa.push([]);
+    aoa.push(['NEXT WEEK PLAN', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)]);
+    aoa.push(['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner']);
+    w.nextWeek.forEach(function(r) {
+      aoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner]);
+    });
+    if (!w.nextWeek.length) aoa.push(['(none)', '', '', '', '', '', '']);
+    var nextAoa = [
+      ['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage'],
+      ['Plan week', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu), '', '', '', '']
+    ];
+    w.nextWeek.forEach(function(r) {
+      nextAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage]);
+    });
+    var lastAoa = [
+      ['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary'],
+      ['Report week', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu), '', '', '', '']
+    ];
+    w.lastWeek.forEach(function(r) {
+      lastAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes]);
+    });
+    pendingEdits.push({
+      type: 'weeklyReport',
+      weeklyAoa: aoa,
+      nextWeekAoa: nextAoa,
+      lastWeekAoa: lastAoa
+    });
+    showToast('Weekly report updated', 'success');
+    await saveToDrive({ silent: false });
+    try { localStorage.setItem(key, '1'); } catch (e) {}
+    console.log('[SBA] Auto weekly report saved', key);
+  } catch (e) {
+    console.error('[SBA] Auto weekly report failed', e);
+    showToast('Weekly report auto-save failed — open Weekly tab', 'error');
+  }
+}
+
+// ==================== WEEKLY REPORT (Fri → Thu) ====================
+// Week runs Friday 00:00 through Thursday 23:59 (local time).
+function startOfDay(d) {
+  const x = new Date(d); x.setHours(0,0,0,0); return x;
+}
+function endOfDay(d) {
+  const x = new Date(d); x.setHours(23,59,59,999); return x;
+}
+/** Most recent Friday on or before `ref` (default today). */
+function weekStartFriday(ref) {
+  const d = startOfDay(ref || new Date());
+  const day = d.getDay(); // 0=Sun ... 5=Fri
+  const back = (day - 5 + 7) % 7; // days since Friday
+  d.setDate(d.getDate() - back);
+  return d;
+}
+function weekEndThursday(fridayStart) {
+  const d = endOfDay(fridayStart);
+  d.setDate(d.getDate() + 6); // Fri+6 = Thu
+  return d;
+}
+function fmtYMD(d) {
+  if (!d || isNaN(d.getTime())) return '';
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function parseCompanyDate(val) {
+  if (val == null || val === '') return null;
+  if (val instanceof Date && !isNaN(val.getTime())) return startOfDay(val);
+  if (typeof val === 'number' && val > 20000) {
+    const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
+    return startOfDay(new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate()));
+  }
+  const s = String(val).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return startOfDay(new Date(s.slice(0,10)));
+  const t = Date.parse(s);
+  if (!isNaN(t)) return startOfDay(new Date(t));
+  return null;
+}
+function inRange(date, start, end) {
+  if (!date) return false;
+  return date.getTime() >= start.getTime() && date.getTime() <= end.getTime();
+}
+
+let _weeklyCache = null;
+
+function computeWeeklyReports(refDate) {
+  const ref = refDate || new Date();
+  // Reporting week = Friday 00:00 → Thursday 23:59
+  // Freeze every Thursday at 18:00:
+  //   BEFORE freeze: last week = previous Fri–Thu; next week plan = upcoming Fri–Thu (after current)
+  //   AFTER freeze:  last week = the week that just ended; next week plan = next Fri–Thu
+  // Example on Mon 17 Aug 2026: last = Fri 7 → Thu 13 Aug; next = Fri 21 → Thu 27 Aug
+  // Example after Thu 20 Aug 18:00: last = Fri 14 → Thu 20 Aug; next = Fri 21 → Thu 27 Aug
+  const thisFri = weekStartFriday(ref);
+  const thisThu = weekEndThursday(thisFri);
+  const freeze = new Date(thisThu);
+  freeze.setHours(18, 0, 0, 0);
+
+  let lastFri, lastThu, planFri, planThu, frozen;
+  if (ref.getTime() < freeze.getTime()) {
+    frozen = false;
+    lastFri = new Date(thisFri); lastFri.setDate(lastFri.getDate() - 7);
+    lastThu = weekEndThursday(lastFri);
+    planFri = new Date(thisFri); planFri.setDate(planFri.getDate() + 7);
+    planThu = weekEndThursday(planFri);
+  } else {
+    frozen = true;
+    lastFri = thisFri;
+    lastThu = thisThu;
+    planFri = new Date(thisFri); planFri.setDate(planFri.getDate() + 7);
+    planThu = weekEndThursday(planFri);
+  }
+
+  const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim());
+  const lastWeek = [];
+  const nextWeek = [];
+
+  companies.forEach(function(c) {
+    const lastContact = parseCompanyDate(c.last_contact_date) || parseCompanyDate(c.first_contact_date);
+    const followUp = parseCompanyDate(c.next_follow_up_date);
+    const row = {
+      company: c.name || '',
+      industry: c.industry || '',
+      contact_person: c.contact_person || '',
+      current_supplier: c.current_supplier || '',
+      sales_stage: c.sales_stage || '',
+      last_contact_date: lastContact ? fmtYMD(lastContact) : '',
+      next_follow_up_date: followUp ? fmtYMD(followUp) : '',
+      relationship_level: c.relationship_level || '',
+      sales_owner: c.sales_owner || '',
+      priority: c.priority || '',
+      notes: (c.opportunity_summary || c.notes || '').toString().slice(0, 200)
+    };
+    if (lastContact && inRange(lastContact, lastFri, lastThu)) {
+      lastWeek.push(row);
+    }
+    // Next week plan: ONLY companies whose Next Follow-up Date falls in the plan week (Fri→Thu)
+    if (followUp && inRange(followUp, planFri, planThu)) {
+      nextWeek.push(row);
+    }
+  });
+
+  // Sort last week by last contact desc, next week by follow-up asc
+  lastWeek.sort(function(a,b){ return (b.last_contact_date||'').localeCompare(a.last_contact_date||''); });
+  nextWeek.sort(function(a,b){ return (a.next_follow_up_date||'').localeCompare(b.next_follow_up_date||''); });
+
+  return {
+    lastFri: lastFri, lastThu: lastThu,
+    planFri: planFri, planThu: planThu,
+    freezeAt: freeze,
+    frozen: frozen,
+    generatedAt: new Date(),
+    lastWeek: lastWeek,
+    nextWeek: nextWeek
+  };
+}
+
+function renderWeeklyTable(rows, cols) {
+  if (!rows || !rows.length) return '<p style="color:var(--text-light);">No companies in this period.</p>';
+  let h = '<table class="data-table" style="width:100%;border-collapse:collapse;"><thead><tr>';
+  cols.forEach(function(c){ h += '<th style="text-align:left;padding:6px;border-bottom:2px solid var(--border);">' + escapeHtml(c.label) + '</th>'; });
+  h += '</tr></thead><tbody>';
+  rows.forEach(function(r) {
+    h += '<tr>';
+    cols.forEach(function(c){ h += '<td style="padding:6px;border-bottom:1px solid var(--border);">' + escapeHtml(String(r[c.key] || '')) + '</td>'; });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  return h;
+}
+
+function generateWeeklyReportUI() {
+  if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
+  _weeklyCache = computeWeeklyReports(new Date());
+  const w = _weeklyCache;
+  const meta = document.getElementById('weeklyMeta');
+  if (meta) {
+    meta.innerHTML = '<div><strong>Last week:</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ' (' + w.lastWeek.length + ' contacts)</div>' +
+      '<div><strong>Next week plan:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) + ' (' + w.nextWeek.length + ' items)</div>' +
+      '<div><strong>Freeze:</strong> every Thursday 18:00 — ' + (w.frozen ? 'LOCKED for this cycle' : 'updates until ' + w.freezeAt.toLocaleString()) + '</div>' +
+      '<div style="margin-top:4px;color:var(--text-light);">Generated ' + w.generatedAt.toLocaleString() + ' · Week = Fri→Thu · Next plan = Next Follow-up Date only</div>';
+  }
+  const lt = document.getElementById('lastWeekTitle');
+  if (lt) lt.textContent = 'Last Week Report (' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ')';
+  const nt = document.getElementById('nextWeekTitle');
+  if (nt) nt.textContent = 'Next Week Plan (' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) + ')';
+  const lastCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'industry', label: 'Industry' },
+    { key: 'contact_person', label: 'Contact' },
+    { key: 'last_contact_date', label: 'Last Contact' },
+    { key: 'sales_stage', label: 'Stage' },
+    { key: 'notes', label: 'Summary' }
+  ];
+  const nextCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'industry', label: 'Industry' },
+    { key: 'contact_person', label: 'Contact' },
+    { key: 'current_supplier', label: 'Supplier' },
+    { key: 'next_follow_up_date', label: 'Next Follow-up' },
+    { key: 'sales_stage', label: 'Stage' }
+  ];
+  const lw = document.getElementById('lastWeekTable');
+  const nw = document.getElementById('nextWeekTable');
+  if (lw) lw.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
+  if (nw) nw.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
+  showToast('Weekly report generated', 'success');
+}
+
+function saveWeeklyReportToExcel() {
+  if (!workbook || !originalArrayBuffer) { showToast('Open your Excel file first', 'warning'); return; }
+  if (!_weeklyCache) generateWeeklyReportUI();
+  const w = _weeklyCache;
+  if (!w) return;
+
+  // Build AOA for a single "Weekly Report" sheet (both sections)
+  const aoa = [];
+  aoa.push(['SBA Ethiopia — Weekly Report']);
+  aoa.push(['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()]);
+  aoa.push(['Week rule', 'Friday → Thursday']);
+  aoa.push([]);
+  aoa.push(['LAST WEEK REPORT', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)]);
+  aoa.push(['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']);
+  w.lastWeek.forEach(function(r) {
+    aoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
+  });
+  if (!w.lastWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
+  aoa.push([]);
+  aoa.push(['NEXT WEEK PLAN', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)]);
+  aoa.push(['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner']);
+  w.nextWeek.forEach(function(r) {
+    aoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner]);
+  });
+  if (!w.nextWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
+
+  // Also build simple Next week plan sheet (legacy 4-col format + extras)
+  const nextAoa = [
+    ['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage'],
+    ['Plan week', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu), '', '', '', '']
+  ];
+  w.nextWeek.forEach(function(r) {
+    nextAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage]);
+  });
+
+  const lastAoa = [
+    ['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary'],
+    ['Report week', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu), '', '', '', '']
+  ];
+  w.lastWeek.forEach(function(r) {
+    lastAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes]);
+  });
+
+  pendingEdits.push({
+    type: 'weeklyReport',
+    weeklyAoa: aoa,
+    nextWeekAoa: nextAoa,
+    lastWeekAoa: lastAoa
+  });
+  markDirtyAndScheduleSave();
+  showToast('Weekly report queued — saving to Excel…', 'success');
+}
+
+async function applyWeeklyReportToZip(zip, edit) {
+  // Same sheet: write BOTH last-week + next-week sections onto "Next week plan"
+  // (workbook already has this sheet). Also mirror to "Weekly Report" if present.
+  const sheets = [
+    { name: 'Next week plan', aoa: edit.weeklyAoa },
+    { name: 'Weekly Report', aoa: edit.weeklyAoa }
+  ];
+  // Build a minimal workbook for these sheets via SheetJS then copy sheet XML is hard.
+  // Instead: write AOA into SheetJS workbook and use sheet_to_json path — for zip we rebuild sheet1-style XML simply.
+  const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+
+  for (let s = 0; s < sheets.length; s++) {
+    const spec = sheets[s];
+    const aoa = spec.aoa || [];
+    // Build simple sheet XML with inline strings
+    let rowsXml = '';
+    for (let r = 0; r < aoa.length; r++) {
+      const row = aoa[r] || [];
+      let cells = '';
+      for (let c = 0; c < row.length; c++) {
+        const val = row[c];
+        if (val === undefined || val === null || val === '') continue;
+        const ref = colLetters(c) + (r + 1);
+        const text = String(val);
+        // escape XML
+        const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        cells += '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + esc + '</t></is></c>';
+      }
+      if (cells) rowsXml += '<row r="' + (r + 1) + '">' + cells + '</row>';
+    }
+    const sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheetData>' + rowsXml + '</sheetData></worksheet>';
+
+    let path = sheetNameToPath[spec.name];
+    if (path) {
+      zip.file(path, sheetXml);
+      console.log('[SBA] Updated sheet', spec.name, 'at', path);
+    } else {
+      // Sheet missing — skip creating new workbook parts (complex); update SheetJS only
+      console.warn('[SBA] Sheet not in workbook:', spec.name, '— updated in app memory only');
+    }
+    // Always update in-memory SheetJS so Sheets tab shows it
+    try {
+      if (!workbook.Sheets[spec.name]) {
+        workbook.SheetNames.push(spec.name);
+      }
+      workbook.Sheets[spec.name] = XLSX.utils.aoa_to_sheet(aoa);
+    } catch (e) { console.warn(e); }
+  }
+}
+
 
 function renderSheets() {
   if (!workbook) {
