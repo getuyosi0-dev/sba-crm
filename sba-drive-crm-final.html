@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v16</title>
+<title>SBA Drive CRM v17</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -485,7 +485,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba16-2026-08-16-autosave';
+const SBA_APP_VERSION = 'sba17-2026-08-17-edit-fields';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1813,23 +1813,78 @@ function editCompany(rowIndex, sheetName) {
     {key:'sales_owner',label:'Sales Owner',type:'text'},
   ];
 
-  document.getElementById('editForm').innerHTML = fields.map(f => {
-    let val = company[f.key] != null ? company[f.key] : '';
-    // Excel stores dates as serial numbers — convert for <input type="date">
-    if (f.type === 'date' && typeof val === 'number' && val > 20000) {
-      const utc = new Date(Date.UTC(1899, 11, 30) + val * 86400000);
+  const canonMap = buildCanonicalToHeaderKey(headers);
+  function pickCompanyVal(key) {
+    // Prefer canonical key, then mapped sheet header key
+    let v = company[key];
+    if (v === undefined || v === null || v === '') {
+      const actual = canonMap[key];
+      if (actual) v = company[actual];
+    }
+    // Notes field reads Opportunity Summary column
+    if (key === 'notes' && (v === undefined || v === null || v === '')) {
+      v = company.opportunity_summary || company[canonMap.opportunity_summary];
+    }
+    if (key === 'est_value' && (v === undefined || v === null || v === '')) {
+      v = company.est_business_value_etb || company[canonMap.est_value];
+    }
+    return v !== undefined && v !== null ? v : '';
+  }
+  function toDateInputValue(val) {
+    if (val === undefined || val === null || val === '') return '';
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      const y = val.getFullYear();
+      const mo = String(val.getMonth() + 1).padStart(2, '0');
+      const d = String(val.getDate()).padStart(2, '0');
+      return y + '-' + mo + '-' + d;
+    }
+    if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) {
+      const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
       const y = utc.getUTCFullYear();
       const mo = String(utc.getUTCMonth() + 1).padStart(2, '0');
       const d = String(utc.getUTCDate()).padStart(2, '0');
-      val = y + '-' + mo + '-' + d;
+      return y + '-' + mo + '-' + d;
     }
+    const s = String(val).trim();
+    // Already ISO
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    // Numeric serial as string
+    if (/^\d{5}(\.\d+)?$/.test(s)) {
+      const n = parseFloat(s);
+      if (n > 20000 && n < 100000) return toDateInputValue(n);
+    }
+    // Never put text like "Critical" / "Domino" into date inputs
+    return '';
+  }
+  function toNumberInputValue(val) {
+    if (val === undefined || val === null || val === '') return '';
+    if (typeof val === 'number' && isFinite(val)) return val;
+    const s = String(val).replace(/,/g, '').replace(/ETB/gi, '').trim();
+    if (s === '') return '';
+    const n = parseFloat(s);
+    return isFinite(n) ? n : '';
+  }
+
+  document.getElementById('editForm').innerHTML = fields.map(f => {
+    let val = pickCompanyVal(f.key);
+    if (f.type === 'date') val = toDateInputValue(val);
+    else if (f.type === 'number') val = toNumberInputValue(val);
     const safeVal = escapeHtml(String(val));
     if (f.type === 'select') {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><select class="form-select" id="edit_${f.key}">${f.options.map(o => `<option value="${escapeHtml(o)}" ${String(o)===String(val)?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></div>`;
+      const opts = f.options.map(o => {
+        const sel = String(o) === String(val) ? ' selected' : '';
+        return '<option value="' + escapeHtml(o) + '"' + sel + '>' + escapeHtml(o) + '</option>';
+      }).join('');
+      // If current value not in list, keep a selected placeholder option
+      let extra = '';
+      if (val && f.options.indexOf(String(val)) === -1) {
+        extra = '<option value="' + safeVal + '" selected>' + safeVal + '</option>';
+      }
+      return '<div class="form-group"><label class="form-label">' + f.label + '</label><select class="form-select" id="edit_' + f.key + '">' + extra + opts + '</select></div>';
     } else if (f.type === 'textarea') {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><textarea class="form-textarea" id="edit_${f.key}">${safeVal}</textarea></div>`;
+      return '<div class="form-group"><label class="form-label">' + f.label + '</label><textarea class="form-textarea" id="edit_' + f.key + '">' + safeVal + '</textarea></div>';
     } else {
-      return `<div class="form-group"><label class="form-label">${f.label}</label><input type="${f.type}" class="form-input" id="edit_${f.key}" value="${safeVal}"></div>`;
+      return '<div class="form-group"><label class="form-label">' + f.label + '</label><input type="' + f.type + '" class="form-input" id="edit_' + f.key + '" value="' + safeVal + '"></div>';
     }
   }).join('');
 
