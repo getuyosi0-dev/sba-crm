@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v20</title>
+<title>SBA Drive CRM v21</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -485,7 +485,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba20-2026-08-17-cols-dashboard';
+const SBA_APP_VERSION = 'sba21-2026-08-17-formulas';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -2797,6 +2797,49 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     const endColLetters = (parts[1] || parts[0]).match(/^[A-Z]+/) ? (parts[1] || parts[0]).match(/^[A-Z]+/)[0] : 'A';
     dimEl.setAttribute('ref', parts[0] + ':' + endColLetters + endRow);
   }
+
+  // Write formula columns (Days, Probability, Priority Score, Priority, Next Action, Follow-up Status, Rank)
+  // These are not in valueByCol — must be added explicitly or new rows show blank calculated cells.
+  const formulaKeys = [
+    'days_since_last_visit',
+    'probability',
+    'priority_score',
+    'priority',
+    'next_action',
+    'follow_up_status',
+    'rank_helper'
+  ];
+  formulaKeys.forEach(function(fkey) {
+    let col = headerColMap[fkey];
+    if (col === undefined && fkey === 'probability') col = headerColMap['probability_'];
+    if (col === undefined && fkey === 'rank_helper') col = headerColMap['rank'];
+    if (col === undefined) return;
+    const formulaText = (typeof builtInFormulaForKey === 'function' ? builtInFormulaForKey(fkey, newRowNum) : null);
+    if (!formulaText) return;
+    const colRef = colLetters(col) + newRowNum;
+    let cellEl = ssChildren(newRowEl, 'c').find(function(c) { return c.getAttribute('r') === colRef; });
+    if (!cellEl) {
+      cellEl = ssEl(doc, 'c');
+      cellEl.setAttribute('r', colRef);
+      insertCellInOrder(newRowEl, cellEl, col);
+    } else {
+      // Clear any static value accidentally written
+      while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
+      cellEl.removeAttribute('t');
+    }
+    // Copy style from template if available
+    if (templateRowEl) {
+      const tc = ssChildren(templateRowEl, 'c').find(function(c) {
+        const r = colIndexFromRef(c.getAttribute('r'));
+        return r && r.col === col;
+      });
+      if (tc && tc.hasAttribute('s')) cellEl.setAttribute('s', tc.getAttribute('s'));
+    }
+    const fEl = ssEl(doc, 'f');
+    fEl.textContent = String(formulaText).replace(/^=/, '');
+    cellEl.appendChild(fEl);
+    console.log('[SBA] Formula', colRef, fkey, '→', String(formulaText).slice(0, 50));
+  });
 
   // Expand conditional formatting sqref ranges that end at the previous last data row
   try {
