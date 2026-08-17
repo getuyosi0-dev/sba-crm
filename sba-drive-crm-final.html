@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v17</title>
+<title>SBA Drive CRM v18</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -485,7 +485,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba17-2026-08-17-edit-fields';
+const SBA_APP_VERSION = 'sba18-2026-08-17-edit-save';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -844,6 +844,12 @@ async function saveToDrive(options) {
     pendingEdits = [];
     isDirty = false;
     lastSavedAt = new Date();
+    // Keep UI in sync with what was actually uploaded
+    try {
+      workbook = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellFormula: true, cellStyles: true, cellDates: true });
+      renderDashboard();
+      renderCompanies();
+    } catch (e) { console.warn('[SBA] post-save workbook reload failed', e); }
     hideSaveErrorBanner();
     showSaveResult(true, null, silent);
     autoSaveInFlight = false;
@@ -1916,7 +1922,29 @@ function saveCompanyEdit() {
     row[headerMap[canonMap.opportunity_summary]] = notesEl.value;
   }
 
-  workbook.Sheets[editingSheetName] = XLSX.utils.aoa_to_sheet(data);
+  // Update SheetJS in place (do NOT aoa_to_sheet — that strips formulas / range)
+  try {
+    const ws = workbook.Sheets[editingSheetName];
+    fields.forEach(function(f) {
+      const el = document.getElementById('edit_' + f);
+      if (!el) return;
+      const actualKey = canonMap[f] || (headerMap[f] !== undefined ? f : null);
+      if (actualKey == null || headerMap[actualKey] === undefined) return;
+      const col = headerMap[actualKey];
+      const excelRow = editingCompanyIndex + 1;
+      const addr = colLetters(col) + excelRow;
+      const v = el.value;
+      if (isDateFieldKey(actualKey) || isDateFieldKey(f)) {
+        const serial = toExcelDateSerial(v);
+        XLSX.utils.sheet_add_aoa(ws, [[serial != null ? serial : v]], { origin: addr });
+      } else if (f === 'total_contacted' || f === 'est_value') {
+        const n = parseFloat(String(v).replace(/,/g, ''));
+        XLSX.utils.sheet_add_aoa(ws, [[isFinite(n) ? n : v]], { origin: addr });
+      } else {
+        XLSX.utils.sheet_add_aoa(ws, [[v]], { origin: addr });
+      }
+    });
+  } catch (e) { console.warn('[SBA] in-memory sheet update failed', e); }
 
   const editValues = {};
   fields.forEach(f => {
@@ -1934,9 +1962,9 @@ function saveCompanyEdit() {
   if (editingIsPendingAdd) {
     const addEdit = pendingEdits.find(e => e.type === 'add' && e.sheetName === editingSheetName && e._uiRowIndex === editingCompanyIndex);
     if (addEdit) Object.assign(addEdit.values, editValues);
-    else pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
+    else pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, excelRow: editingCompanyIndex + 1, values: editValues });
   } else {
-    pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, values: editValues });
+    pendingEdits.push({ type: 'edit', sheetName: editingSheetName, rowIndex: editingCompanyIndex, excelRow: editingCompanyIndex + 1, values: editValues });
   }
   editingIsPendingAdd = false;
   markDirtyAndScheduleSave();
@@ -2734,34 +2762,58 @@ function expandDataValidations(doc, oldLastRow, newLastRow) {
 
 // Edits values in an existing row. Never overwrites a cell that already
 // contains a formula — that's the "preserve formulas as formulas" rule.
-function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
-  const rowNum = rowIndex + 1; // data[i] (from sheet_to_json header:1) <-> Excel row i+1
+function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRowOverride) {
+  // rowIndex is AOA index from sheet_to_json (0 = Excel row 1). Prefer explicit excelRow when provided.
+  const rowNum = excelRowOverride || (rowIndex + 1);
   let rowEl = findRowEl(sheetDataEl, rowNum);
   if (!rowEl) {
+    console.warn('[SBA] applyEditRow: row', rowNum, 'not found — creating');
     rowEl = ssEl(doc, 'row');
     rowEl.setAttribute('r', String(rowNum));
     insertRowInOrder(sheetDataEl, rowEl, rowNum);
   }
 
-  // Collect unique columns to write (values may have both canonical and actual keys)
   const writtenCols = new Set();
-  Object.keys(values).forEach(key => {
+  let writeCount = 0;
+  Object.keys(values).forEach(function(key) {
     if (headerColMap[key] === undefined) return;
     const col = headerColMap[key];
     if (writtenCols.has(col)) return;
     writtenCols.add(col);
 
-    const colRef = colLetters(col) + rowNum;
-    let cellEl = ssChildren(rowEl, 'c').find(c => c.getAttribute('r') === colRef);
+    // Never write formula-only calculated columns from the edit form
+    if (FORMULA_ONLY_FIELDS.has(key)) return;
+    if (/^priority$|^probability|priority_score|days_since|next_action|follow_up_status|rank_helper|^rank$/i.test(key)) return;
 
-    if (cellEl && ssFirst(cellEl, 'f')) return; // formula cell — leave untouched
+    const colRef = colLetters(col) + rowNum;
+    let cellEl = ssChildren(rowEl, 'c').find(function(c) { return c.getAttribute('r') === colRef; });
+
+    // Skip only true calculated formula cells; allow overwriting empty/broken formula stubs on input cols
+    if (cellEl) {
+      const fEl = ssFirst(cellEl, 'f');
+      if (fEl) {
+        const fText = (fEl.textContent || '').trim();
+        if (fText && fText !== '=') {
+          // Real formula — do not overwrite
+          return;
+        }
+        // Empty/broken formula on an input column: clear and write value
+        while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
+        cellEl.removeAttribute('t');
+      }
+    }
 
     let val = values[key];
     if (val === '' || val === undefined || val === null) {
-      if (cellEl) rowEl.removeChild(cellEl);
+      if (cellEl && !ssFirst(cellEl, 'f')) rowEl.removeChild(cellEl);
       return;
     }
     val = coerceValueForExcel(key, val);
+    // Dates from form may still be long Date.toString() — force serial when field is date
+    if (isDateFieldKey(key)) {
+      const serial = toExcelDateSerial(val);
+      if (serial != null) val = serial;
+    }
 
     if (!cellEl) {
       cellEl = ssEl(doc, 'c');
@@ -2771,11 +2823,10 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
       while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
       cellEl.removeAttribute('t');
     }
-    // Ensure date columns keep a date number format
     if (isDateFieldKey(key) && !cellEl.hasAttribute('s')) {
       const rows = ssChildren(rowEl.parentNode, 'row');
       for (let i = 0; i < Math.min(rows.length, 40); i++) {
-        const sample = ssChildren(rows[i], 'c').find(c => {
+        const sample = ssChildren(rows[i], 'c').find(function(c) {
           const r = colIndexFromRef(c.getAttribute('r'));
           return r && r.col === col && c.hasAttribute('s');
         });
@@ -2796,7 +2847,14 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values) {
       isEl.appendChild(tEl);
       cellEl.appendChild(isEl);
     }
+    writeCount++;
+    console.log('[SBA] Edit write', colRef, key, '=', String(val).slice(0, 40));
   });
+  console.log('[SBA] applyEditRow Excel row', rowNum, 'cells written:', writeCount);
+  if (writeCount === 0) {
+    console.warn('[SBA] applyEditRow wrote 0 cells — keys:', Object.keys(values), 'headerColMap keys sample:', Object.keys(headerColMap).slice(0, 15));
+  }
+  return writeCount;
 }
 
 // Generates the actual bytes used for BOTH Save to Drive and Download —
@@ -2922,7 +2980,9 @@ async function generateSafeWorkbookBuffer() {
       if (tableInfo) touchedTablePaths.add(sheetPath);
     }
     for (const edit of edits) {
-      applyEditRow(doc, sheetDataEl, headerColMap, edit.rowIndex, edit.values);
+      const writes = applyEditRow(doc, sheetDataEl, headerColMap, edit.rowIndex, edit.values, edit.excelRow);
+      if (!writes) console.warn('[SBA] Edit applied 0 cells for rowIndex', edit.rowIndex, 'excelRow', edit.excelRow, edit.values);
+
     }
 
     if (tableInfo && tableInfo.ref) expectedTableRefs[sheetPath] = tableInfo.ref;
