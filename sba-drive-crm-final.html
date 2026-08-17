@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v18</title>
+<title>SBA Drive CRM v20</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -485,7 +485,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba18-2026-08-17-edit-save';
+const SBA_APP_VERSION = 'sba20-2026-08-17-cols-dashboard';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1346,8 +1346,37 @@ function isClosedStage(stage) {
 
 function renderDashboard() {
   if (!workbook) return;
-  const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim());
-  const total = companies.length;
+  const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim()
+    && !/^(legend|notes?)$/i.test(String(c.name).trim())
+    && String(c.name).indexOf('——') !== 0);
+  // Prefer Excel Dashboard cached Total Customers when present; else count Sales Tracker
+  let total = companies.length;
+  try {
+    const dashName = (workbook.SheetNames || []).find(function(n) { return /dashboard/i.test(n); });
+    if (dashName) {
+      const drows = XLSX.utils.sheet_to_json(workbook.Sheets[dashName], { header: 1, defval: '' });
+      // Find "Total Customers" label and value in next cell / row below
+      outer:
+      for (let r = 0; r < Math.min(drows.length, 30); r++) {
+        for (let c = 0; c < (drows[r] || []).length; c++) {
+          if (String(drows[r][c]).toLowerCase().indexOf('total customer') !== -1) {
+            // value often on same row next cols or row below
+            const candidates = [
+              drows[r][c+1], drows[r][c+2],
+              (drows[r+1] && drows[r+1][c]),
+              (drows[r+1] && drows[r+1][c+1]),
+              (drows[r+1] && drows[r+1][0]),
+              (drows[r+1] && drows[r+1][1])
+            ];
+            for (let k = 0; k < candidates.length; k++) {
+              const n = parseFloat(candidates[k]);
+              if (isFinite(n) && n > 0 && n < 100000) { total = Math.round(n); break outer; }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) { console.warn('[SBA] Dashboard total read failed', e); }
   const active = companies.filter(c => !isClosedStage(c.sales_stage)).length;
   const criticalHigh = companies.filter(c => {
     const p = companyPriorityLabel(c).toLowerCase();
@@ -2068,7 +2097,20 @@ function saveCompany() {
   const uiRowIndex = preferredExcelRowClamped - 1;
   while (data.length <= uiRowIndex) data.push(new Array(headers.length).fill(''));
   data[uiRowIndex] = newRow;
-  workbook.Sheets[targetName] = XLSX.utils.aoa_to_sheet(data);
+  // Update SheetJS display without rebuilding entire sheet (keeps formulas / avoids 900 empty rows)
+  try {
+    const ws = workbook.Sheets[targetName];
+    headers.forEach(function(h, colIdx) {
+      if (!h) return;
+      const v = newRow[colIdx];
+      if (v === undefined || v === null || v === '') return;
+      const addr = colLetters(colIdx) + preferredExcelRowClamped;
+      XLSX.utils.sheet_add_aoa(ws, [[v]], { origin: addr });
+    });
+  } catch (e) {
+    console.warn('[SBA] SheetJS single-row update failed, falling back to aoa_to_sheet', e);
+    workbook.Sheets[targetName] = XLSX.utils.aoa_to_sheet(data);
+  }
   console.log('[SBA] Preferred Excel row:', preferredExcelRowClamped, '(last real company on row', lastExistingExcelRow + ')');
 
   // Values for XML patch: actual header keys + canonical
@@ -2562,6 +2604,17 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     newRowNum = templateRowNum + 1;
   }
 
+  // ALWAYS honor preferredExcelRow from SheetJS (last real company + 1).
+  // XML/table padding otherwise appends near row 990 and Google Sheet looks "unchanged".
+  if (preferredExcelRow && preferredExcelRow > 1) {
+    if (newRowNum !== preferredExcelRow) {
+      console.log('[SBA] FORCING newRowNum', newRowNum, '→ preferredExcelRow', preferredExcelRow);
+    }
+    newRowNum = preferredExcelRow;
+    templateRowNum = Math.max(2, preferredExcelRow - 1);
+  }
+  console.log('[SBA] applyAddRow writing at Excel row', newRowNum, '(template', templateRowNum + ')');
+
   const templateRowEl = findRowEl(sheetDataEl, templateRowNum);
   // If a blank/sparse row already exists at newRowNum, remove it so we can write a full row
   const existingAtNew = findRowEl(sheetDataEl, newRowNum);
@@ -2580,10 +2633,35 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
   let addedCompanyName = null;
 
   // Iterate columns in column order for cleaner XML
-  const keysByCol = Object.keys(headerColMap).sort((a, b) => headerColMap[a] - headerColMap[b]);
-
-  keysByCol.forEach(key => {
+  // One value per column — prefer real headers over aliases (fixes Industry=CompanyName)
+  const preferKey = function(a, b) {
+    const rank = function(k) {
+      if (/^(company|industry|contact_person|relationship_level|est_business_value_etb|opportunity_summary)$/.test(k)) return 0;
+      if (/^(name|est_value|notes|opp_status)$/.test(k)) return 2;
+      return 1;
+    };
+    return rank(a) <= rank(b) ? a : b;
+  };
+  const valueByCol = {};
+  Object.keys(headerColMap).forEach(function(key) {
     const col = headerColMap[key];
+    let val = values[key];
+    if (val === undefined || val === null || val === '') return;
+    if (typeof FORMULA_ONLY_FIELDS !== 'undefined' && FORMULA_ONLY_FIELDS.has(key)) return;
+    if (/^priority$|probability|priority_score|days_since|next_action|follow_up_status|rank/i.test(key)) return;
+    if (!valueByCol[col] || preferKey(key, valueByCol[col].key) === key) {
+      valueByCol[col] = { key: key, val: val };
+    }
+  });
+  const nameVal = values.company || values.name || values.company_name;
+  const nameColIdx = headerColMap.company !== undefined ? headerColMap.company
+    : (headerColMap.name !== undefined ? headerColMap.name : 0);
+  if (nameVal !== undefined && nameVal !== null && nameVal !== '') {
+    valueByCol[nameColIdx] = { key: 'company', val: nameVal };
+  }
+
+  Object.keys(valueByCol).map(Number).sort(function(a,b){return a-b;}).forEach(function(col) {
+    const key = valueByCol[col].key;
     const colRef = colLetters(col) + newRowNum;
     const templateCellEl = templateRowEl
       ? ssChildren(templateRowEl, 'c').find(c => {
@@ -2607,7 +2685,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
       return null;
     }
     // Accept value under this key OR under any alias that maps here
-    let val = values[key];
+    let val = valueByCol[col].val;
     if (val === undefined || val === null || val === '') {
       // try canonical aliases that resolve to this key
       for (const canon of Object.keys(FIELD_ALIASES)) {
