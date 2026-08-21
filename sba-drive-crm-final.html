@@ -519,7 +519,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-sheets-create';
+const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-styled-sheets';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -3588,15 +3588,29 @@ function buildWeeklyAoaPack(w) {
 
 function renderWeeklyTable(rows, cols) {
   if (!rows || !rows.length) return '<p style="color:var(--text-light);">No companies in this period.</p>';
-  let h = '<table class="data-table" style="width:100%;border-collapse:collapse;"><thead><tr>';
-  cols.forEach(function(c){ h += '<th style="text-align:left;padding:6px;border-bottom:2px solid var(--border);">' + escapeHtml(c.label) + '</th>'; });
+  let h = '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><table class="data-table" style="width:max-content;min-width:100%;border-collapse:collapse;font-size:13px;">';
+  h += '<thead><tr style="background:var(--primary);color:#fff;">';
+  cols.forEach(function(c) {
+    h += '<th style="text-align:left;padding:10px 12px;white-space:nowrap;font-weight:600;font-size:12px;">' + escapeHtml(c.label) + '</th>';
+  });
   h += '</tr></thead><tbody>';
-  rows.forEach(function(r) {
-    h += '<tr>';
-    cols.forEach(function(c){ h += '<td style="padding:6px;border-bottom:1px solid var(--border);">' + escapeHtml(String(r[c.key] || '')) + '</td>'; });
+  rows.forEach(function(r, i) {
+    const overdue = r._overdue || String(r._flag || '').toUpperCase() === 'OVERDUE';
+    const bg = overdue ? '#fde8e8' : (i % 2 ? '#f0f7ff' : '#fff');
+    h += '<tr style="background:' + bg + ';">';
+    cols.forEach(function(c) {
+      const isName = c.key === 'company' || c.key === 'name';
+      const isNotes = c.key === 'notes' || c.key === 'opportunity_summary';
+      const val = String(r[c.key] || '');
+      const style = 'padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top;' +
+        (isName ? 'font-weight:600;min-width:160px;max-width:280px;white-space:normal;word-break:break-word;' :
+          isNotes ? 'min-width:140px;max-width:240px;white-space:normal;word-break:break-word;color:var(--text-light);' :
+          'white-space:nowrap;');
+      h += '<td style="' + style + '" title="' + escapeHtml(val) + '">' + escapeHtml(val) + '</td>';
+    });
     h += '</tr>';
   });
-  h += '</tbody></table>';
+  h += '</tbody></table></div>';
   return h;
 }
 
@@ -3817,28 +3831,285 @@ async function applyWeeklyReportToZip(zip, edit) {
     return { name: best, path: sheetNameToPath[best], score: bestScore };
   }
 
-  function aoaToSheetXml(aoa) {
-    let rowsXml = '';
+  /** Append SBA weekly styles to xl/styles.xml; returns style index map. */
+  async function ensureWeeklyStyles(zip) {
+    const MARKER = 'sbaWeeklyStyles';
+    const stylesFile = zip.file('xl/styles.xml');
+    if (!stylesFile) {
+      return { title: 0, subtitle: 0, header: 0, body: 0, bodyAlt: 0, overdue: 0, meta: 0 };
+    }
+    let xml = await stylesFile.async('string');
+
+    // If we already injected, parse stored indices from a comment
+    const prev = xml.match(/<!-- sbaWeeklyStyles:title=(\d+),subtitle=(\d+),header=(\d+),body=(\d+),bodyAlt=(\d+),overdue=(\d+),meta=(\d+) -->/);
+    if (prev) {
+      return {
+        title: +prev[1], subtitle: +prev[2], header: +prev[3],
+        body: +prev[4], bodyAlt: +prev[5], overdue: +prev[6], meta: +prev[7]
+      };
+    }
+
+    // Count existing fonts / fills / cellXfs to append
+    function countTag(tag) {
+      const re = new RegExp('<' + tag + '[\\s>]', 'g');
+      let n = 0, m;
+      while ((m = re.exec(xml)) !== null) n++;
+      return n;
+    }
+    // fonts count from <fonts count="N">
+    const fontsCountMatch = xml.match(/<fonts[^>]*count="(\d+)"/);
+    const fillsCountMatch = xml.match(/<fills[^>]*count="(\d+)"/);
+    const xfsCountMatch = xml.match(/<cellXfs[^>]*count="(\d+)"/);
+    let fontsCount = fontsCountMatch ? parseInt(fontsCountMatch[1], 10) : 0;
+    let fillsCount = fillsCountMatch ? parseInt(fillsCountMatch[1], 10) : 0;
+    let xfsCount = xfsCountMatch ? parseInt(xfsCountMatch[1], 10) : 0;
+
+    const newFonts = [
+      // title: bold 16 primary blue
+      '<font><b/><sz val="16"/><color rgb="FF0F4C81"/><name val="Calibri"/><family val="2"/></font>',
+      // subtitle / meta: 10 grey
+      '<font><sz val="10"/><color rgb="FF6C757D"/><name val="Calibri"/><family val="2"/></font>',
+      // header: bold 11 white
+      '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/><family val="2"/></font>',
+      // body: 11 dark
+      '<font><sz val="11"/><color rgb="FF1A1A2E"/><name val="Calibri"/><family val="2"/></font>',
+      // overdue: bold 11 red
+      '<font><b/><sz val="11"/><color rgb="FFC0392B"/><name val="Calibri"/><family val="2"/></font>'
+    ];
+    const fontIdx = {
+      title: fontsCount,
+      subtitle: fontsCount + 1,
+      header: fontsCount + 2,
+      body: fontsCount + 3,
+      overdue: fontsCount + 4
+    };
+    fontsCount += newFonts.length;
+
+    const newFills = [
+      // header navy
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF0F4C81"/><bgColor indexed="64"/></patternFill></fill>',
+      // alt row light blue-grey
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFF0F7FF"/><bgColor indexed="64"/></patternFill></fill>',
+      // overdue soft red
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFFDE8E8"/><bgColor indexed="64"/></patternFill></fill>',
+      // title row soft gold accent bar area - light
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF8E1"/><bgColor indexed="64"/></patternFill></fill>'
+    ];
+    const fillIdx = {
+      header: fillsCount,
+      bodyAlt: fillsCount + 1,
+      overdue: fillsCount + 2,
+      title: fillsCount + 3
+    };
+    fillsCount += newFills.length;
+
+    // borders: thin light grey (append one)
+    let bordersCount = 0;
+    const bordersCountMatch = xml.match(/<borders[^>]*count="(\d+)"/);
+    bordersCount = bordersCountMatch ? parseInt(bordersCountMatch[1], 10) : 0;
+    const thinBorder =
+      '<border><left style="thin"><color rgb="FFD0D7DE"/></left>' +
+      '<right style="thin"><color rgb="FFD0D7DE"/></right>' +
+      '<top style="thin"><color rgb="FFD0D7DE"/></top>' +
+      '<bottom style="thin"><color rgb="FFD0D7DE"/></bottom>' +
+      '<diagonal/></border>';
+    const borderIdx = bordersCount;
+    bordersCount += 1;
+
+    // cellXfs — need xf with fontId, fillId, borderId, apply*
+    function xf(fontId, fillId, borderId, opts) {
+      opts = opts || {};
+      return '<xf numFmtId="0" fontId="' + fontId + '" fillId="' + fillId + '" borderId="' + borderId +
+        '" xfId="0"' +
+        ' applyFont="1" applyFill="1" applyBorder="1"' +
+        (opts.align ? ' applyAlignment="1"' : '') + '>' +
+        (opts.align || '') +
+        '</xf>';
+    }
+    const alignWrap = '<alignment wrapText="1" vertical="center"/>';
+    const alignHeader = '<alignment wrapText="1" vertical="center" horizontal="center"/>';
+    const alignLeft = '<alignment wrapText="1" vertical="center" horizontal="left"/>';
+
+    // Default fill 0 is usually none; use 0 for body non-alt
+    const newXfs = [
+      xf(fontIdx.title, fillIdx.title, borderIdx, { align: alignLeft }),       // title
+      xf(fontIdx.subtitle, 0, 0, { align: alignLeft }),                        // subtitle/meta
+      xf(fontIdx.header, fillIdx.header, borderIdx, { align: alignHeader }),   // header
+      xf(fontIdx.body, 0, borderIdx, { align: alignWrap }),                    // body
+      xf(fontIdx.body, fillIdx.bodyAlt, borderIdx, { align: alignWrap }),      // bodyAlt
+      xf(fontIdx.overdue, fillIdx.overdue, borderIdx, { align: alignWrap }),   // overdue
+      xf(fontIdx.subtitle, 0, 0, { align: alignLeft })                         // meta label
+    ];
+    const styleMap = {
+      title: xfsCount,
+      subtitle: xfsCount + 1,
+      header: xfsCount + 2,
+      body: xfsCount + 3,
+      bodyAlt: xfsCount + 4,
+      overdue: xfsCount + 5,
+      meta: xfsCount + 6
+    };
+    xfsCount += newXfs.length;
+
+    // Inject fonts
+    if (/<fonts[^>]*count="\d+"[^>]*>/.test(xml)) {
+      xml = xml.replace(/(<fonts[^>]*count=")(\d+)(")/, '$1' + fontsCount + '$3');
+      xml = xml.replace(/<\/fonts>/, newFonts.join('') + '</fonts>');
+    }
+    // Inject fills
+    if (/<fills[^>]*count="\d+"[^>]*>/.test(xml)) {
+      xml = xml.replace(/(<fills[^>]*count=")(\d+)(")/, '$1' + fillsCount + '$3');
+      xml = xml.replace(/<\/fills>/, newFills.join('') + '</fills>');
+    }
+    // Inject borders
+    if (/<borders[^>]*count="\d+"[^>]*>/.test(xml)) {
+      xml = xml.replace(/(<borders[^>]*count=")(\d+)(")/, '$1' + bordersCount + '$3');
+      xml = xml.replace(/<\/borders>/, thinBorder + '</borders>');
+    }
+    // Inject cellXfs
+    if (/<cellXfs[^>]*count="\d+"[^>]*>/.test(xml)) {
+      xml = xml.replace(/(<cellXfs[^>]*count=")(\d+)(")/, '$1' + xfsCount + '$3');
+      xml = xml.replace(/<\/cellXfs>/, newXfs.join('') + '</cellXfs>');
+    }
+
+    const comment = '<!-- sbaWeeklyStyles:title=' + styleMap.title +
+      ',subtitle=' + styleMap.subtitle +
+      ',header=' + styleMap.header +
+      ',body=' + styleMap.body +
+      ',bodyAlt=' + styleMap.bodyAlt +
+      ',overdue=' + styleMap.overdue +
+      ',meta=' + styleMap.meta + ' -->';
+    if (xml.indexOf(MARKER) === -1) {
+      xml = xml.replace(/<styleSheet([^>]*)>/, '<styleSheet$1>' + comment);
+    }
+    zip.file('xl/styles.xml', xml);
+    console.log('[SBA] Weekly styles injected', styleMap);
+    return styleMap;
+  }
+
+  function detectRowKind(row, rowIndex, headerRowIndex) {
+    if (!row || !row.length) return 'empty';
+    const a = String(row[0] || '');
+    if (rowIndex === 0 || /weekly report|last week|next week|job done/i.test(a)) {
+      // first data-ish title, or explicit title text
+      if (rowIndex === 0 || /report|plan|job done/i.test(a)) return 'title';
+    }
+    if (/^company$/i.test(a)) return 'header';
+    if (headerRowIndex >= 0 && rowIndex === headerRowIndex) return 'header';
+    if (row.length <= 2 && /generated|week rule|freeze|plan week|report week|auto-saved/i.test(a)) return 'meta';
+    if (String(row[row.length - 1] || '').toUpperCase() === 'OVERDUE') return 'overdue';
+    return 'body';
+  }
+
+  function findHeaderRowIndex(aoa) {
+    for (let i = 0; i < aoa.length; i++) {
+      if (aoa[i] && /^company$/i.test(String(aoa[i][0] || ''))) return i;
+    }
+    return -1;
+  }
+
+  function computeColWidths(aoa, maxCols) {
+    // Character-based widths; Excel width ≈ chars for Calibri 11
+    const widths = [];
+    for (let c = 0; c < maxCols; c++) {
+      let maxLen = 8;
+      for (let r = 0; r < aoa.length; r++) {
+        const cell = aoa[r] && aoa[r][c] != null ? String(aoa[r][c]) : '';
+        // Prefer full length so long company names are not clipped
+        if (cell.length > maxLen) maxLen = cell.length;
+      }
+      // Cap: company col can be very wide; others moderate
+      let w = maxLen + 2;
+      if (c === 0) w = Math.min(Math.max(w, 28), 55);      // Company
+      else if (c === 5 || c === 6) w = Math.min(Math.max(w, 18), 40); // notes / stage
+      else w = Math.min(Math.max(w, 12), 28);
+      widths.push(w);
+    }
+    return widths;
+  }
+
+  function aoaToSheetXml(aoa, styles) {
+    styles = styles || { title: 0, subtitle: 0, header: 0, body: 0, bodyAlt: 0, overdue: 0, meta: 0 };
+    const headerRowIndex = findHeaderRowIndex(aoa);
     let maxCol = 0;
     for (let r = 0; r < aoa.length; r++) {
-      const row = aoa[r] || [];
-      if (row.length > maxCol) maxCol = row.length;
-      let cells = '';
-      for (let c = 0; c < row.length; c++) {
-        const val = row[c];
-        if (val === undefined || val === null || val === '') continue;
-        const ref = colLetters(c) + (r + 1);
-        const esc = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-        cells += '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + esc + '</t></is></c>';
-      }
-      if (cells) rowsXml += '<row r="' + (r + 1) + '">' + cells + '</row>';
+      if (aoa[r] && aoa[r].length > maxCol) maxCol = aoa[r].length;
     }
-    const endCol = colLetters(Math.max(0, maxCol - 1));
-    const dim = 'A1:' + endCol + Math.max(1, aoa.length);
+    if (maxCol < 1) maxCol = 1;
+    const widths = computeColWidths(aoa, maxCol);
+
+    let colsXml = '<cols>';
+    for (let c = 0; c < maxCol; c++) {
+      colsXml += '<col min="' + (c + 1) + '" max="' + (c + 1) + '" width="' + widths[c].toFixed(2) + '" customWidth="1"/>';
+    }
+    colsXml += '</cols>';
+
+    let rowsXml = '';
+    let bodyDataIndex = 0;
+    for (let r = 0; r < aoa.length; r++) {
+      const row = aoa[r] || [];
+      const kind = detectRowKind(row, r, headerRowIndex);
+      let styleId = styles.body;
+      let ht = 18;
+      if (kind === 'title') { styleId = styles.title; ht = 28; }
+      else if (kind === 'meta' || kind === 'subtitle') { styleId = styles.meta; ht = 16; }
+      else if (kind === 'header') { styleId = styles.header; ht = 22; }
+      else if (kind === 'overdue') { styleId = styles.overdue; ht = 20; }
+      else if (kind === 'body') {
+        styleId = (bodyDataIndex % 2 === 1) ? styles.bodyAlt : styles.body;
+        bodyDataIndex++;
+        ht = 20;
+      }
+
+      // For title/meta rows with few cells, still span visual width by writing empty styled cells? skip empties ok
+      let cells = '';
+      for (let c = 0; c < maxCol; c++) {
+        const val = row[c];
+        const ref = colLetters(c) + (r + 1);
+        if (val === undefined || val === null || val === '') {
+          // Still emit empty cell with style on header/title rows so fill covers the row
+          if (kind === 'header' || kind === 'title') {
+            cells += '<c r="' + ref + '" s="' + styleId + '"/>';
+          }
+          continue;
+        }
+        const esc = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        cells += '<c r="' + ref + '" s="' + styleId + '" t="inlineStr"><is><t xml:space="preserve">' + esc + '</t></is></c>';
+      }
+      if (cells) {
+        rowsXml += '<row r="' + (r + 1) + '" ht="' + ht + '" customHeight="1">' + cells + '</row>';
+      }
+    }
+
+    const endCol = colLetters(maxCol - 1);
+    const lastRow = Math.max(1, aoa.length);
+    const dim = 'A1:' + endCol + lastRow;
+
+    // Freeze below header row when present
+    let freezeXml = '';
+    let autoFilterXml = '';
+    if (headerRowIndex >= 0) {
+      const freezeAt = headerRowIndex + 2; // Excel row below header
+      freezeXml =
+        '<sheetViews><sheetView workbookViewId="0">' +
+        '<pane ySplit="' + (headerRowIndex + 1) + '" topLeftCell="A' + freezeAt + '" activePane="bottomLeft" state="frozen"/>' +
+        '</sheetView></sheetViews>';
+      // AutoFilter on header + data rows
+      const dataEnd = lastRow;
+      autoFilterXml = '<autoFilter ref="A' + (headerRowIndex + 1) + ':' + endCol + dataEnd + '"/>';
+    } else {
+      freezeXml = '<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>';
+    }
+
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<dimension ref="' + dim + '"/>' +
-      '<sheetData>' + rowsXml + '</sheetData></worksheet>';
+      freezeXml +
+      colsXml +
+      '<sheetData>' + rowsXml + '</sheetData>' +
+      autoFilterXml +
+      '</worksheet>';
   }
 
   async function writeAoaToSheet(foundOrNull, aoa, preferredName, label) {
@@ -3862,8 +4133,9 @@ async function applyWeeklyReportToZip(zip, edit) {
         return;
       }
     }
-    zip.file(target.path, aoaToSheetXml(aoa));
-    console.log('[SBA] Weekly wrote', label, '→ sheet "' + target.name + '" path=' + target.path + ' (' + aoa.length + ' rows)');
+    const styles = await ensureWeeklyStyles(zip);
+    zip.file(target.path, aoaToSheetXml(aoa, styles));
+    console.log('[SBA] Weekly wrote', label, '→ sheet "' + target.name + '" path=' + target.path + ' (' + aoa.length + ' rows, styled)');
     try {
       if (!workbook.Sheets[target.name]) workbook.SheetNames.push(target.name);
       workbook.Sheets[target.name] = XLSX.utils.aoa_to_sheet(aoa);
