@@ -519,7 +519,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-plan-fix';
+const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-sheets-create';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -3663,15 +3663,128 @@ function saveWeeklyReportToExcel() {
     nextWeekAoa: pack.nextWeekAoa,
     lastWeekAoa: pack.lastWeekAoa
   });
-  markDirtyAndScheduleSave();
-  showToast('Weekly report queued — saving last week + next plan to Excel…', 'success');
+  showToast('Saving Last Week Report + Next Week Plan sheets to Drive…', 'success');
+  // Save immediately so sheets appear in Drive/Google Sheets without waiting for auto-save
+  saveToDrive({ silent: false }).then(function(ok) {
+    if (ok) {
+      showToast('Saved. Open your Excel in Drive → look for sheets "Last Week Report" and "Next Week Plan"', 'success');
+    }
+  });
+}
+
+/**
+ * Create a new worksheet in the .xlsx ZIP if it does not already exist.
+ * Updates workbook.xml, workbook.xml.rels, and [Content_Types].xml.
+ * Returns { name, path } for the sheet.
+ */
+async function ensureSheetInZip(zip, desiredName) {
+  const parts = await loadZipParts(zip);
+  // Already exists (exact)?
+  if (parts.sheetNameToPath[desiredName]) {
+    return { name: desiredName, path: parts.sheetNameToPath[desiredName], created: false };
+  }
+  // Case-insensitive match
+  for (let i = 0; i < parts.allSheetNames.length; i++) {
+    const n = parts.allSheetNames[i];
+    if (String(n).toLowerCase() === String(desiredName).toLowerCase()) {
+      return { name: n, path: parts.sheetNameToPath[n], created: false };
+    }
+  }
+
+  const wbFile = zip.file('xl/workbook.xml');
+  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  const ctFile = zip.file('[Content_Types].xml');
+  if (!wbFile || !relsFile || !ctFile) {
+    throw new Error('Cannot add sheet — missing workbook structure');
+  }
+
+  let wbXml = await wbFile.async('string');
+  let relsXml = await relsFile.async('string');
+  let ctXml = await ctFile.async('string');
+
+  // Highest existing sheet number under xl/worksheets/
+  let maxSheetNum = 0;
+  Object.keys(zip.files).forEach(function(p) {
+    const m = /^xl\/worksheets\/sheet(\d+)\.xml$/i.exec(p);
+    if (m) maxSheetNum = Math.max(maxSheetNum, parseInt(m[1], 10));
+  });
+  const newNum = maxSheetNum + 1;
+  const sheetPath = 'xl/worksheets/sheet' + newNum + '.xml';
+  const relTarget = 'worksheets/sheet' + newNum + '.xml';
+
+  // Next rId
+  let maxRid = 0;
+  const ridRe = /Id="rId(\d+)"/g;
+  let rm;
+  while ((rm = ridRe.exec(relsXml)) !== null) {
+    maxRid = Math.max(maxRid, parseInt(rm[1], 10));
+  }
+  const newRid = 'rId' + (maxRid + 1);
+
+  // Next sheetId attribute
+  let maxSheetId = 0;
+  const sidRe = /sheetId="(\d+)"/g;
+  let sm;
+  while ((sm = sidRe.exec(wbXml)) !== null) {
+    maxSheetId = Math.max(maxSheetId, parseInt(sm[1], 10));
+  }
+  const newSheetId = maxSheetId + 1;
+
+  const safeName = String(desiredName)
+    .replace(/[\\/*?:\[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 31) || 'Sheet' + newNum;
+
+  // Empty worksheet placeholder (will be overwritten with data immediately after)
+  const emptySheetXml =
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<sheetData/></worksheet>';
+  zip.file(sheetPath, emptySheetXml);
+
+  // Relationship
+  if (relsXml.indexOf('</Relationships>') !== -1) {
+    relsXml = relsXml.replace(
+      '</Relationships>',
+      '<Relationship Id="' + newRid + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="' + relTarget + '"/>' +
+      '</Relationships>'
+    );
+  } else {
+    throw new Error('workbook.xml.rels missing </Relationships>');
+  }
+  zip.file('xl/_rels/workbook.xml.rels', relsXml);
+
+  // workbook.xml <sheets>
+  const sheetTag = '<sheet name="' + safeName.replace(/&/g, '&amp;').replace(/"/g, '&quot;') +
+    '" sheetId="' + newSheetId + '" r:id="' + newRid + '"/>';
+  if (/<sheets[^>]*>[\s\S]*?<\/sheets>/.test(wbXml)) {
+    wbXml = wbXml.replace(/<\/sheets>/, sheetTag + '</sheets>');
+  } else {
+    throw new Error('workbook.xml missing <sheets>');
+  }
+  zip.file('xl/workbook.xml', wbXml);
+
+  // Content_Types
+  const override =
+    '<Override PartName="/' + sheetPath + '" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>';
+  if (ctXml.indexOf('PartName="/' + sheetPath + '"') === -1) {
+    if (ctXml.indexOf('</Types>') !== -1) {
+      ctXml = ctXml.replace('</Types>', override + '</Types>');
+      zip.file('[Content_Types].xml', ctXml);
+    }
+  }
+
+  console.log('[SBA] Created new sheet "' + safeName + '" at', sheetPath, newRid);
+  return { name: safeName, path: sheetPath, created: true };
 }
 
 async function applyWeeklyReportToZip(zip, edit) {
-  // Write SEPARATE content:
-  //   - Next week plan sheet  → nextWeekAoa only
-  //   - Last week / Weekly Report sheet → lastWeekAoa (or combined weeklyAoa as fallback)
-  // Fuzzy-match existing sheet names (emoji / spacing tolerant).
+  // Write SEPARATE content into real workbook sheets (create if missing):
+  //   - "Next Week Plan"  → nextWeekAoa
+  //   - "Last Week Report" → lastWeekAoa
+  //   - "Weekly Report"    → combined weeklyAoa (optional mirror)
   const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
   console.log('[SBA] Weekly write — available sheets:', allSheetNames.join(', '));
 
@@ -3684,12 +3797,11 @@ async function applyWeeklyReportToZip(zip, edit) {
       if (/next\s*week/.test(n)) score += 8;
     } else if (kind === 'last') {
       if (/last/.test(n) && /week|report|job|done/.test(n)) score += 10;
-      if (/weekly\s*report/.test(n) || /^weekly$/.test(n)) score += 8;
       if (/job\s*done|done\s*last/.test(n)) score += 9;
-      if (/report/.test(n) && !/next|dashboard|tracker/.test(n)) score += 4;
+      if (/last\s*week/.test(n)) score += 8;
     } else if (kind === 'combined') {
       if (/weekly\s*report/.test(n)) score += 10;
-      if (/weekly/.test(n) && !/next/.test(n)) score += 6;
+      if (/^weekly$/.test(n)) score += 6;
     }
     return score;
   }
@@ -3707,8 +3819,10 @@ async function applyWeeklyReportToZip(zip, edit) {
 
   function aoaToSheetXml(aoa) {
     let rowsXml = '';
+    let maxCol = 0;
     for (let r = 0; r < aoa.length; r++) {
       const row = aoa[r] || [];
+      if (row.length > maxCol) maxCol = row.length;
       let cells = '';
       for (let c = 0; c < row.length; c++) {
         const val = row[c];
@@ -3719,40 +3833,73 @@ async function applyWeeklyReportToZip(zip, edit) {
       }
       if (cells) rowsXml += '<row r="' + (r + 1) + '">' + cells + '</row>';
     }
+    const endCol = colLetters(Math.max(0, maxCol - 1));
+    const dim = 'A1:' + endCol + Math.max(1, aoa.length);
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<dimension ref="' + dim + '"/>' +
       '<sheetData>' + rowsXml + '</sheetData></worksheet>';
   }
 
-  function writeAoaToSheet(found, aoa, label) {
-    if (!aoa || !aoa.length) return;
-    const displayName = found ? found.name : label;
-    if (found && found.path) {
-      zip.file(found.path, aoaToSheetXml(aoa));
-      console.log('[SBA] Weekly wrote', label, '→ sheet "' + displayName + '" (' + aoa.length + ' rows)');
-    } else {
-      console.warn('[SBA] No matching sheet for', label, '— available:', allSheetNames.join(', '), '— in-memory only');
+  async function writeAoaToSheet(foundOrNull, aoa, preferredName, label) {
+    if (!aoa || !aoa.length) {
+      console.warn('[SBA] Weekly skip empty AOA for', label);
+      return;
     }
+    let target = foundOrNull;
+    if (!target || !target.path) {
+      // CREATE the sheet in the real .xlsx so Drive/Google Sheets show it
+      try {
+        target = await ensureSheetInZip(zip, preferredName);
+        console.log('[SBA] Ensured sheet for', label, '→', target.name, target.created ? '(new)' : '(existing)');
+      } catch (e) {
+        console.error('[SBA] Failed to create sheet', preferredName, e);
+        // Fall back to in-memory only
+        try {
+          if (!workbook.Sheets[preferredName]) workbook.SheetNames.push(preferredName);
+          workbook.Sheets[preferredName] = XLSX.utils.aoa_to_sheet(aoa);
+        } catch (e2) {}
+        return;
+      }
+    }
+    zip.file(target.path, aoaToSheetXml(aoa));
+    console.log('[SBA] Weekly wrote', label, '→ sheet "' + target.name + '" path=' + target.path + ' (' + aoa.length + ' rows)');
     try {
-      if (!workbook.Sheets[displayName]) workbook.SheetNames.push(displayName);
-      workbook.Sheets[displayName] = XLSX.utils.aoa_to_sheet(aoa);
+      if (!workbook.Sheets[target.name]) workbook.SheetNames.push(target.name);
+      workbook.Sheets[target.name] = XLSX.utils.aoa_to_sheet(aoa);
     } catch (e) { console.warn(e); }
   }
 
-  const nextFound = findBestSheet('next');
-  const lastFound = findBestSheet('last');
-  const combinedFound = findBestSheet('combined');
+  let nextFound = findBestSheet('next');
+  let lastFound = findBestSheet('last');
+  let combinedFound = findBestSheet('combined');
 
-  // Prefer dedicated sheets; avoid writing the same sheet twice
-  writeAoaToSheet(nextFound, edit.nextWeekAoa || edit.weeklyAoa, 'Next week plan');
+  // Always write plan + last-week into dedicated sheets (create if missing)
+  await writeAoaToSheet(nextFound, edit.nextWeekAoa || edit.weeklyAoa, 'Next Week Plan', 'Next week plan');
+  // Reload names after possible create so last doesn't collide
+  const afterNext = await loadZipParts(zip);
+  // refresh finders against updated map
+  if (!lastFound) {
+    // re-score on updated names
+    let best = null, bestScore = 0;
+    afterNext.allSheetNames.forEach(function(n) {
+      const s = scoreSheet(n, 'last');
+      if (s > bestScore) { bestScore = s; best = n; }
+    });
+    if (best && bestScore >= 4) lastFound = { name: best, path: afterNext.sheetNameToPath[best] };
+  }
+  await writeAoaToSheet(
+    lastFound && (!nextFound || lastFound.name !== nextFound.name) ? lastFound : null,
+    edit.lastWeekAoa || edit.weeklyAoa,
+    'Last Week Report',
+    'Last week report'
+  );
 
-  if (lastFound && (!nextFound || lastFound.name !== nextFound.name)) {
-    writeAoaToSheet(lastFound, edit.lastWeekAoa || edit.weeklyAoa, 'Last week report');
-  } else if (combinedFound && (!nextFound || combinedFound.name !== nextFound.name)) {
-    writeAoaToSheet(combinedFound, edit.weeklyAoa || edit.lastWeekAoa, 'Weekly Report (combined)');
-  } else if (!lastFound && !combinedFound) {
-    // No last/weekly sheet in workbook — still keep data in memory under a clear name
-    writeAoaToSheet(null, edit.lastWeekAoa || edit.weeklyAoa, 'Last Week Report');
+  // Optional combined "Weekly Report" if one already exists (don't create a third unless present)
+  if (combinedFound &&
+      (!nextFound || combinedFound.name !== nextFound.name) &&
+      (!lastFound || combinedFound.name !== lastFound.name)) {
+    await writeAoaToSheet(combinedFound, edit.weeklyAoa, 'Weekly Report', 'Weekly Report (combined)');
   }
 }
 
