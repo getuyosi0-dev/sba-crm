@@ -384,8 +384,9 @@ body { padding-bottom: 80px; }
     <div class="card-title">Weekly Report</div>
     <p style="font-size:13px;color:var(--text-light);margin:0 0 12px;">
       Week = <strong>Friday → Thursday</strong>. Freezes <strong>Thursday 18:00</strong>.
-      Open the app <strong>Thursday after 18:00 or Friday</strong> → report auto-generates and saves to Drive.
-      You can still Generate / Save manually any day.
+      <strong>Last week</strong> = companies with Last Contact in the finished week.
+      <strong>Next week plan</strong> = open deals with Next Follow-up in the plan week (plus overdue follow-ups).
+      Auto-runs Thursday after 18:00 or Friday. You can Generate / Save any day.
     </p>
     <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
     <button class="btn" onclick="generateWeeklyReportUI()">Generate / Refresh Report</button>
@@ -518,7 +519,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-21-fix-selectedFileId-auth';
+const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-plan-fix';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -3362,49 +3363,18 @@ async function maybeAutoWeeklyReport() {
   try { if (localStorage.getItem(key) === '1') return; } catch (e) {}
   try {
     _weeklyCache = w;
-    var aoa = [];
-    aoa.push(['SBA Ethiopia — Weekly Report']);
-    aoa.push(['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()]);
-    aoa.push(['Week rule', 'Friday → Thursday']);
-    aoa.push(['Auto-saved', 'Opened app Thursday 18:00+ or Friday']);
-    aoa.push([]);
-    aoa.push(['LAST WEEK REPORT', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)]);
-    aoa.push(['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']);
-    w.lastWeek.forEach(function(r) {
-      aoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
-    });
-    if (!w.lastWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
-    aoa.push([]);
-    aoa.push(['NEXT WEEK PLAN', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)]);
-    aoa.push(['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner']);
-    w.nextWeek.forEach(function(r) {
-      aoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner]);
-    });
-    if (!w.nextWeek.length) aoa.push(['(none)', '', '', '', '', '', '']);
-    var nextAoa = [
-      ['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage'],
-      ['Plan week', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu), '', '', '', '']
-    ];
-    w.nextWeek.forEach(function(r) {
-      nextAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage]);
-    });
-    var lastAoa = [
-      ['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary'],
-      ['Report week', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu), '', '', '', '']
-    ];
-    w.lastWeek.forEach(function(r) {
-      lastAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes]);
-    });
+    var pack = buildWeeklyAoaPack(w);
     pendingEdits.push({
       type: 'weeklyReport',
-      weeklyAoa: aoa,
-      nextWeekAoa: nextAoa,
-      lastWeekAoa: lastAoa
+      weeklyAoa: pack.weeklyAoa,
+      nextWeekAoa: pack.nextWeekAoa,
+      lastWeekAoa: pack.lastWeekAoa
     });
-    showToast('Weekly report updated', 'success');
+    try { generateWeeklyReportUI(); } catch (e2) {}
+    showToast('Weekly report auto-updated (' + w.lastWeek.length + ' done, ' + w.nextWeek.length + ' plan)', 'success');
     await saveToDrive({ silent: false });
     try { localStorage.setItem(key, '1'); } catch (e) {}
-    console.log('[SBA] Auto weekly report saved', key);
+    console.log('[SBA] Auto weekly report saved', key, 'last', w.lastWeek.length, 'next', w.nextWeek.length);
   } catch (e) {
     console.error('[SBA] Auto weekly report failed', e);
     showToast('Weekly report auto-save failed — open Weekly tab', 'error');
@@ -3458,12 +3428,20 @@ let _weeklyCache = null;
 
 function computeWeeklyReports(refDate) {
   const ref = refDate || new Date();
-  // Reporting week = Friday 00:00 → Thursday 23:59
-  // Freeze every Thursday at 18:00:
-  //   BEFORE freeze: last week = previous Fri–Thu; next week plan = upcoming Fri–Thu (after current)
-  //   AFTER freeze:  last week = the week that just ended; next week plan = next Fri–Thu
-  // Example on Mon 17 Aug 2026: last = Fri 7 → Thu 13 Aug; next = Fri 21 → Thu 27 Aug
-  // Example after Thu 20 Aug 18:00: last = Fri 14 → Thu 20 Aug; next = Fri 21 → Thu 27 Aug
+  // Week = Friday 00:00 → Thursday 23:59 (local).
+  // Freeze every Thursday 18:00 of the *current* Fri→Thu cycle:
+  //
+  // BEFORE freeze (Fri morning … Thu 17:59):
+  //   Last week  = previous Fri→Thu (work already done)
+  //   Plan week  = THIS Fri→Thu (the week you are in / organising)
+  //
+  // AFTER freeze (Thu 18:00 … until next Fri):
+  //   Last week  = this Fri→Thu (locked)
+  //   Plan week  = next Fri→Thu
+  //
+  // Example Fri 21 Aug 2026: last = Fri 14 → Thu 20; plan = Fri 21 → Thu 27
+  // Example Mon 17 Aug 2026: last = Fri 7 → Thu 13;  plan = Fri 14 → Thu 20
+  // Example Thu 20 Aug 19:00: last = Fri 14 → Thu 20; plan = Fri 21 → Thu 27
   const thisFri = weekStartFriday(ref);
   const thisThu = weekEndThursday(thisFri);
   const freeze = new Date(thisThu);
@@ -3474,8 +3452,8 @@ function computeWeeklyReports(refDate) {
     frozen = false;
     lastFri = new Date(thisFri); lastFri.setDate(lastFri.getDate() - 7);
     lastThu = weekEndThursday(lastFri);
-    planFri = new Date(thisFri); planFri.setDate(planFri.getDate() + 7);
-    planThu = weekEndThursday(planFri);
+    planFri = thisFri;
+    planThu = thisThu;
   } else {
     frozen = true;
     lastFri = thisFri;
@@ -3484,38 +3462,71 @@ function computeWeeklyReports(refDate) {
     planThu = weekEndThursday(planFri);
   }
 
-  const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim());
+  const companies = getCompaniesFromWorkbook().filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim())
+      && String(c.name).indexOf('——') !== 0;
+  });
   const lastWeek = [];
   const nextWeek = [];
+  const seenNext = {};
 
   companies.forEach(function(c) {
-    const lastContact = parseCompanyDate(c.last_contact_date) || parseCompanyDate(c.first_contact_date);
+    const lastContact = parseCompanyDate(c.last_contact_date);
+    // Only fall back to first_contact for "last week done" if last_contact is empty
+    const contactForLast = lastContact || parseCompanyDate(c.first_contact_date);
     const followUp = parseCompanyDate(c.next_follow_up_date);
+    const stage = String(c.sales_stage || '').trim();
+    const closed = isClosedStage(stage);
     const row = {
       company: c.name || '',
       industry: c.industry || '',
       contact_person: c.contact_person || '',
       current_supplier: c.current_supplier || '',
-      sales_stage: c.sales_stage || '',
-      last_contact_date: lastContact ? fmtYMD(lastContact) : '',
+      sales_stage: stage,
+      last_contact_date: contactForLast ? fmtYMD(contactForLast) : '',
       next_follow_up_date: followUp ? fmtYMD(followUp) : '',
       relationship_level: c.relationship_level || '',
       sales_owner: c.sales_owner || '',
-      priority: c.priority || '',
-      notes: (c.opportunity_summary || c.notes || '').toString().slice(0, 200)
+      priority: companyPriorityLabel(c) || c.priority || '',
+      notes: (c.opportunity_summary || c.notes || '').toString().slice(0, 200),
+      _overdue: false
     };
-    if (lastContact && inRange(lastContact, lastFri, lastThu)) {
+
+    // Last week = job done: had a contact (visit) in the finished week
+    if (contactForLast && inRange(contactForLast, lastFri, lastThu)) {
       lastWeek.push(row);
     }
-    // Next week plan: ONLY companies whose Next Follow-up Date falls in the plan week (Fri→Thu)
+
+    // Next week plan: open deals only
+    if (closed) return;
+
+    let includePlan = false;
     if (followUp && inRange(followUp, planFri, planThu)) {
-      nextWeek.push(row);
+      includePlan = true;
+    } else if (followUp && followUp.getTime() < planFri.getTime()) {
+      // Overdue follow-up still open → include so it stays on the plan
+      includePlan = true;
+      row._overdue = true;
+    }
+
+    if (includePlan) {
+      const key = String(row.company).toLowerCase();
+      if (!seenNext[key]) {
+        seenNext[key] = true;
+        nextWeek.push(row);
+      }
     }
   });
 
-  // Sort last week by last contact desc, next week by follow-up asc
-  lastWeek.sort(function(a,b){ return (b.last_contact_date||'').localeCompare(a.last_contact_date||''); });
-  nextWeek.sort(function(a,b){ return (a.next_follow_up_date||'').localeCompare(b.next_follow_up_date||''); });
+  lastWeek.sort(function(a, b) {
+    return (b.last_contact_date || '').localeCompare(a.last_contact_date || '');
+  });
+  nextWeek.sort(function(a, b) {
+    // Overdue first, then by follow-up date ascending
+    if (a._overdue !== b._overdue) return a._overdue ? -1 : 1;
+    return (a.next_follow_up_date || '').localeCompare(b.next_follow_up_date || '');
+  });
 
   return {
     lastFri: lastFri, lastThu: lastThu,
@@ -3526,6 +3537,53 @@ function computeWeeklyReports(refDate) {
     lastWeek: lastWeek,
     nextWeek: nextWeek
   };
+}
+
+/** Build AOAs for Excel sheets from a computeWeeklyReports() result. */
+function buildWeeklyAoaPack(w) {
+  const weeklyAoa = [];
+  weeklyAoa.push(['SBA Ethiopia — Weekly Report']);
+  weeklyAoa.push(['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()]);
+  weeklyAoa.push(['Week rule', 'Friday → Thursday']);
+  weeklyAoa.push(['Freeze', w.frozen ? 'LOCKED' : 'Open until ' + w.freezeAt.toLocaleString()]);
+  weeklyAoa.push([]);
+  weeklyAoa.push(['LAST WEEK REPORT (job done)', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)]);
+  weeklyAoa.push(['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']);
+  w.lastWeek.forEach(function(r) {
+    weeklyAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
+  });
+  if (!w.lastWeek.length) weeklyAoa.push(['(none)', '', '', '', '', '', '', '']);
+  weeklyAoa.push([]);
+  weeklyAoa.push(['NEXT WEEK PLAN', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)]);
+  weeklyAoa.push(['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner', 'Flag']);
+  w.nextWeek.forEach(function(r) {
+    weeklyAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner, r._overdue ? 'OVERDUE' : '']);
+  });
+  if (!w.nextWeek.length) weeklyAoa.push(['(none)', '', '', '', '', '', '', '']);
+
+  const nextAoa = [
+    ['Next Week Plan', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)],
+    ['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()],
+    [],
+    ['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner', 'Flag']
+  ];
+  w.nextWeek.forEach(function(r) {
+    nextAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner, r._overdue ? 'OVERDUE' : '']);
+  });
+  if (!w.nextWeek.length) nextAoa.push(['(none)', '', '', '', '', '', '', '']);
+
+  const lastAoa = [
+    ['Last Week Report (job done)', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)],
+    ['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()],
+    [],
+    ['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']
+  ];
+  w.lastWeek.forEach(function(r) {
+    lastAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
+  });
+  if (!w.lastWeek.length) lastAoa.push(['(none)', '', '', '', '', '', '', '']);
+
+  return { weeklyAoa: weeklyAoa, nextWeekAoa: nextAoa, lastWeekAoa: lastAoa };
 }
 
 function renderWeeklyTable(rows, cols) {
@@ -3546,15 +3604,24 @@ function generateWeeklyReportUI() {
   if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
   _weeklyCache = computeWeeklyReports(new Date());
   const w = _weeklyCache;
+  const overdueCount = w.nextWeek.filter(function(r) { return r._overdue; }).length;
   const meta = document.getElementById('weeklyMeta');
   if (meta) {
-    meta.innerHTML = '<div><strong>Last week:</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ' (' + w.lastWeek.length + ' contacts)</div>' +
-      '<div><strong>Next week plan:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) + ' (' + w.nextWeek.length + ' items)</div>' +
-      '<div><strong>Freeze:</strong> every Thursday 18:00 — ' + (w.frozen ? 'LOCKED for this cycle' : 'updates until ' + w.freezeAt.toLocaleString()) + '</div>' +
-      '<div style="margin-top:4px;color:var(--text-light);">Generated ' + w.generatedAt.toLocaleString() + ' · Week = Fri→Thu · Next plan = Next Follow-up Date only</div>';
+    meta.innerHTML =
+      '<div><strong>Last week (job done):</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) +
+        ' — <strong>' + w.lastWeek.length + '</strong> contacts</div>' +
+      '<div><strong>Plan week:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) +
+        ' — <strong>' + w.nextWeek.length + '</strong> items' +
+        (overdueCount ? ' <span style="color:var(--danger);">(' + overdueCount + ' overdue)</span>' : '') +
+        '</div>' +
+      '<div><strong>Freeze:</strong> Thursday 18:00 — ' +
+        (w.frozen ? '<span style="color:var(--warning);">LOCKED</span> (plan = next Fri→Thu)' : 'open until ' + w.freezeAt.toLocaleString()) +
+        '</div>' +
+      '<div style="margin-top:4px;color:var(--text-light);">Generated ' + w.generatedAt.toLocaleString() +
+        ' · Last week = Last Contact date · Plan = Next Follow-up (open deals) + overdue</div>';
   }
   const lt = document.getElementById('lastWeekTitle');
-  if (lt) lt.textContent = 'Last Week Report (' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ')';
+  if (lt) lt.textContent = 'Last Week — Job Done (' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ')';
   const nt = document.getElementById('nextWeekTitle');
   if (nt) nt.textContent = 'Next Week Plan (' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) + ')';
   const lastCols = [
@@ -3571,13 +3638,16 @@ function generateWeeklyReportUI() {
     { key: 'contact_person', label: 'Contact' },
     { key: 'current_supplier', label: 'Supplier' },
     { key: 'next_follow_up_date', label: 'Next Follow-up' },
-    { key: 'sales_stage', label: 'Stage' }
+    { key: 'sales_stage', label: 'Stage' },
+    { key: '_flag', label: 'Flag' }
   ];
+  // Annotate flag for table render
+  w.nextWeek.forEach(function(r) { r._flag = r._overdue ? 'OVERDUE' : ''; });
   const lw = document.getElementById('lastWeekTable');
   const nw = document.getElementById('nextWeekTable');
   if (lw) lw.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
   if (nw) nw.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
-  showToast('Weekly report generated', 'success');
+  showToast('Weekly report: ' + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
 }
 
 function saveWeeklyReportToExcel() {
@@ -3586,91 +3656,56 @@ function saveWeeklyReportToExcel() {
   const w = _weeklyCache;
   if (!w) return;
 
-  // Build AOA for a single "Weekly Report" sheet (both sections)
-  const aoa = [];
-  aoa.push(['SBA Ethiopia — Weekly Report']);
-  aoa.push(['Generated', fmtYMD(w.generatedAt) + ' ' + w.generatedAt.toLocaleTimeString()]);
-  aoa.push(['Week rule', 'Friday → Thursday']);
-  aoa.push([]);
-  aoa.push(['LAST WEEK REPORT', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu)]);
-  aoa.push(['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary', 'Supplier', 'Owner']);
-  w.lastWeek.forEach(function(r) {
-    aoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes, r.current_supplier, r.sales_owner]);
-  });
-  if (!w.lastWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
-  aoa.push([]);
-  aoa.push(['NEXT WEEK PLAN', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu)]);
-  aoa.push(['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage', 'Owner']);
-  w.nextWeek.forEach(function(r) {
-    aoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage, r.sales_owner]);
-  });
-  if (!w.nextWeek.length) aoa.push(['(none)', '', '', '', '', '', '', '']);
-
-  // Also build simple Next week plan sheet (legacy 4-col format + extras)
-  const nextAoa = [
-    ['Company', 'Industry', 'Contact Person', 'Current Supplier', 'Next Follow-up Date', 'Sales Stage'],
-    ['Plan week', fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu), '', '', '', '']
-  ];
-  w.nextWeek.forEach(function(r) {
-    nextAoa.push([r.company, r.industry, r.contact_person, r.current_supplier, r.next_follow_up_date, r.sales_stage]);
-  });
-
-  const lastAoa = [
-    ['Company', 'Industry', 'Contact Person', 'Last Contact', 'Sales Stage', 'Opportunity Summary'],
-    ['Report week', fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu), '', '', '', '']
-  ];
-  w.lastWeek.forEach(function(r) {
-    lastAoa.push([r.company, r.industry, r.contact_person, r.last_contact_date, r.sales_stage, r.notes]);
-  });
-
+  const pack = buildWeeklyAoaPack(w);
   pendingEdits.push({
     type: 'weeklyReport',
-    weeklyAoa: aoa,
-    nextWeekAoa: nextAoa,
-    lastWeekAoa: lastAoa
+    weeklyAoa: pack.weeklyAoa,
+    nextWeekAoa: pack.nextWeekAoa,
+    lastWeekAoa: pack.lastWeekAoa
   });
   markDirtyAndScheduleSave();
-  showToast('Weekly report queued — saving to Excel…', 'success');
+  showToast('Weekly report queued — saving last week + next plan to Excel…', 'success');
 }
 
 async function applyWeeklyReportToZip(zip, edit) {
-  // Write weekly report into any sheet whose name matches (case-insensitive, emoji-tolerant).
-  // Prefer existing "Next week plan" / "Weekly Report"; otherwise skip ZIP write (in-memory only).
+  // Write SEPARATE content:
+  //   - Next week plan sheet  → nextWeekAoa only
+  //   - Last week / Weekly Report sheet → lastWeekAoa (or combined weeklyAoa as fallback)
+  // Fuzzy-match existing sheet names (emoji / spacing tolerant).
   const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+  console.log('[SBA] Weekly write — available sheets:', allSheetNames.join(', '));
 
-  function findSheetPath(want) {
-    const wantNorm = String(want).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
-    // exact
-    if (sheetNameToPath[want]) return { name: want, path: sheetNameToPath[want] };
-    // fuzzy
-    for (let i = 0; i < allSheetNames.length; i++) {
-      const n = allSheetNames[i];
-      const nNorm = String(n).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
-      if (nNorm === wantNorm || nNorm.indexOf(wantNorm) !== -1 || wantNorm.indexOf(nNorm) !== -1) {
-        return { name: n, path: sheetNameToPath[n] };
-      }
+  function scoreSheet(name, kind) {
+    const n = String(name).toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    let score = 0;
+    if (kind === 'next') {
+      if (/next/.test(n) && /week|plan/.test(n)) score += 10;
+      if (/plan/.test(n) && !/last|report|dashboard|tracker|master|list/.test(n)) score += 5;
+      if (/next\s*week/.test(n)) score += 8;
+    } else if (kind === 'last') {
+      if (/last/.test(n) && /week|report|job|done/.test(n)) score += 10;
+      if (/weekly\s*report/.test(n) || /^weekly$/.test(n)) score += 8;
+      if (/job\s*done|done\s*last/.test(n)) score += 9;
+      if (/report/.test(n) && !/next|dashboard|tracker/.test(n)) score += 4;
+    } else if (kind === 'combined') {
+      if (/weekly\s*report/.test(n)) score += 10;
+      if (/weekly/.test(n) && !/next/.test(n)) score += 6;
     }
-    // keyword match
-    const keys = wantNorm.split(' ').filter(Boolean);
-    for (let i = 0; i < allSheetNames.length; i++) {
-      const n = allSheetNames[i];
-      const nNorm = String(n).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
-      if (keys.every(function(k) { return nNorm.indexOf(k) !== -1; })) {
-        return { name: n, path: sheetNameToPath[n] };
-      }
-    }
-    return null;
+    return score;
   }
 
-  const sheets = [
-    { want: 'Next week plan', aoa: edit.weeklyAoa },
-    { want: 'Weekly Report', aoa: edit.weeklyAoa }
-  ];
+  function findBestSheet(kind) {
+    let best = null, bestScore = 0;
+    for (let i = 0; i < allSheetNames.length; i++) {
+      const n = allSheetNames[i];
+      const s = scoreSheet(n, kind);
+      if (s > bestScore) { bestScore = s; best = n; }
+    }
+    if (!best || bestScore < 4) return null;
+    return { name: best, path: sheetNameToPath[best], score: bestScore };
+  }
 
-  for (let s = 0; s < sheets.length; s++) {
-    const spec = sheets[s];
-    const aoa = spec.aoa || [];
-    // Build simple sheet XML with inline strings
+  function aoaToSheetXml(aoa) {
     let rowsXml = '';
     for (let r = 0; r < aoa.length; r++) {
       const row = aoa[r] || [];
@@ -3679,33 +3714,45 @@ async function applyWeeklyReportToZip(zip, edit) {
         const val = row[c];
         if (val === undefined || val === null || val === '') continue;
         const ref = colLetters(c) + (r + 1);
-        const text = String(val);
-        // escape XML
-        const esc = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        const esc = String(val).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         cells += '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + esc + '</t></is></c>';
       }
       if (cells) rowsXml += '<row r="' + (r + 1) + '">' + cells + '</row>';
     }
-    const sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<sheetData>' + rowsXml + '</sheetData></worksheet>';
+  }
 
-    const found = findSheetPath(spec.want);
-    const displayName = found ? found.name : spec.want;
+  function writeAoaToSheet(found, aoa, label) {
+    if (!aoa || !aoa.length) return;
+    const displayName = found ? found.name : label;
     if (found && found.path) {
-      zip.file(found.path, sheetXml);
-      console.log('[SBA] Updated sheet', displayName, 'at', found.path);
+      zip.file(found.path, aoaToSheetXml(aoa));
+      console.log('[SBA] Weekly wrote', label, '→ sheet "' + displayName + '" (' + aoa.length + ' rows)');
     } else {
-      // Sheet missing — skip creating new workbook parts (complex); update SheetJS only
-      console.warn('[SBA] Sheet not in workbook:', spec.want, '— available:', allSheetNames.join(', '), '— updated in app memory only');
+      console.warn('[SBA] No matching sheet for', label, '— available:', allSheetNames.join(', '), '— in-memory only');
     }
-    // Always update in-memory SheetJS so Sheets tab shows it
     try {
-      if (!workbook.Sheets[displayName]) {
-        workbook.SheetNames.push(displayName);
-      }
+      if (!workbook.Sheets[displayName]) workbook.SheetNames.push(displayName);
       workbook.Sheets[displayName] = XLSX.utils.aoa_to_sheet(aoa);
     } catch (e) { console.warn(e); }
+  }
+
+  const nextFound = findBestSheet('next');
+  const lastFound = findBestSheet('last');
+  const combinedFound = findBestSheet('combined');
+
+  // Prefer dedicated sheets; avoid writing the same sheet twice
+  writeAoaToSheet(nextFound, edit.nextWeekAoa || edit.weeklyAoa, 'Next week plan');
+
+  if (lastFound && (!nextFound || lastFound.name !== nextFound.name)) {
+    writeAoaToSheet(lastFound, edit.lastWeekAoa || edit.weeklyAoa, 'Last week report');
+  } else if (combinedFound && (!nextFound || combinedFound.name !== nextFound.name)) {
+    writeAoaToSheet(combinedFound, edit.weeklyAoa || edit.lastWeekAoa, 'Weekly Report (combined)');
+  } else if (!lastFound && !combinedFound) {
+    // No last/weekly sheet in workbook — still keep data in memory under a clear name
+    writeAoaToSheet(null, edit.lastWeekAoa || edit.weeklyAoa, 'Last Week Report');
   }
 }
 
