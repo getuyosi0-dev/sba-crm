@@ -518,7 +518,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-17-auto-weekly';
+const SBA_APP_VERSION = 'sba25-2026-08-21-fix-selectedFileId-auth';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -814,7 +814,18 @@ function loadFileFromDrive(fileId) {
     })
     .catch(err => {
       console.error('Load error:', err);
-      showToast('Failed to load file: ' + err.message, 'error');
+      const msg = (err && err.message) ? err.message : String(err);
+      // Stale file ID in localStorage (moved/deleted) — clear so next open doesn't auto-fail
+      if (/not found|404|invalid/i.test(msg)) {
+        try { localStorage.removeItem('sba_drive_file'); } catch (e) {}
+        currentFile = null;
+        originalArrayBuffer = null;
+        workbook = null;
+        updateFileUI();
+        showToast('Saved file was removed from Drive. Select an Excel file again.', 'error');
+      } else {
+        showToast('Failed to load file: ' + msg, 'error');
+      }
     });
 }
 
@@ -975,7 +986,17 @@ async function downloadFile() {
 
 // ==================== UI UPDATES ====================
 function updateFileUI() {
-  if (!currentFile) return;
+  if (!currentFile) {
+    const noFile = document.getElementById('noFileCard');
+    const info = document.getElementById('fileInfoCard');
+    if (noFile) noFile.style.display = 'block';
+    if (info) info.style.display = 'none';
+    ['kpiSection', 'quickActions', 'recentActivityCard', 'pipelineCard', 'priorityCard', 'trendCard', 'top10Card', 'otherMetricsCard'].forEach(function(id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+    return;
+  }
   document.getElementById('noFileCard').style.display = 'none';
   document.getElementById('fileInfoCard').style.display = 'block';
   document.getElementById('kpiSection').style.display = 'grid';
@@ -3331,7 +3352,8 @@ function weeklyAutoKey(w) {
   return 'sba_weekly_auto_' + fmtYMD(w.lastThu);
 }
 async function maybeAutoWeeklyReport() {
-  if (!workbook || !originalArrayBuffer || !accessToken || !selectedFileId) return;
+  // Must have a loaded file (currentFile) — selectedFileId was a leftover bug and threw ReferenceError
+  if (!workbook || !originalArrayBuffer || !accessToken || !currentFile || !currentFile.id) return;
   if (!shouldAutoRunWeeklyReport(new Date())) return;
   var w;
   try { w = computeWeeklyReports(new Date()); }
@@ -3612,15 +3634,38 @@ function saveWeeklyReportToExcel() {
 }
 
 async function applyWeeklyReportToZip(zip, edit) {
-  // Same sheet: write BOTH last-week + next-week sections onto "Next week plan"
-  // (workbook already has this sheet). Also mirror to "Weekly Report" if present.
-  const sheets = [
-    { name: 'Next week plan', aoa: edit.weeklyAoa },
-    { name: 'Weekly Report', aoa: edit.weeklyAoa }
-  ];
-  // Build a minimal workbook for these sheets via SheetJS then copy sheet XML is hard.
-  // Instead: write AOA into SheetJS workbook and use sheet_to_json path — for zip we rebuild sheet1-style XML simply.
+  // Write weekly report into any sheet whose name matches (case-insensitive, emoji-tolerant).
+  // Prefer existing "Next week plan" / "Weekly Report"; otherwise skip ZIP write (in-memory only).
   const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
+
+  function findSheetPath(want) {
+    const wantNorm = String(want).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+    // exact
+    if (sheetNameToPath[want]) return { name: want, path: sheetNameToPath[want] };
+    // fuzzy
+    for (let i = 0; i < allSheetNames.length; i++) {
+      const n = allSheetNames[i];
+      const nNorm = String(n).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+      if (nNorm === wantNorm || nNorm.indexOf(wantNorm) !== -1 || wantNorm.indexOf(nNorm) !== -1) {
+        return { name: n, path: sheetNameToPath[n] };
+      }
+    }
+    // keyword match
+    const keys = wantNorm.split(' ').filter(Boolean);
+    for (let i = 0; i < allSheetNames.length; i++) {
+      const n = allSheetNames[i];
+      const nNorm = String(n).toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+      if (keys.every(function(k) { return nNorm.indexOf(k) !== -1; })) {
+        return { name: n, path: sheetNameToPath[n] };
+      }
+    }
+    return null;
+  }
+
+  const sheets = [
+    { want: 'Next week plan', aoa: edit.weeklyAoa },
+    { want: 'Weekly Report', aoa: edit.weeklyAoa }
+  ];
 
   for (let s = 0; s < sheets.length; s++) {
     const spec = sheets[s];
@@ -3645,20 +3690,21 @@ async function applyWeeklyReportToZip(zip, edit) {
       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
       '<sheetData>' + rowsXml + '</sheetData></worksheet>';
 
-    let path = sheetNameToPath[spec.name];
-    if (path) {
-      zip.file(path, sheetXml);
-      console.log('[SBA] Updated sheet', spec.name, 'at', path);
+    const found = findSheetPath(spec.want);
+    const displayName = found ? found.name : spec.want;
+    if (found && found.path) {
+      zip.file(found.path, sheetXml);
+      console.log('[SBA] Updated sheet', displayName, 'at', found.path);
     } else {
       // Sheet missing — skip creating new workbook parts (complex); update SheetJS only
-      console.warn('[SBA] Sheet not in workbook:', spec.name, '— updated in app memory only');
+      console.warn('[SBA] Sheet not in workbook:', spec.want, '— available:', allSheetNames.join(', '), '— updated in app memory only');
     }
     // Always update in-memory SheetJS so Sheets tab shows it
     try {
-      if (!workbook.Sheets[spec.name]) {
-        workbook.SheetNames.push(spec.name);
+      if (!workbook.Sheets[displayName]) {
+        workbook.SheetNames.push(displayName);
       }
-      workbook.Sheets[spec.name] = XLSX.utils.aoa_to_sheet(aoa);
+      workbook.Sheets[displayName] = XLSX.utils.aoa_to_sheet(aoa);
     } catch (e) { console.warn(e); }
   }
 }
