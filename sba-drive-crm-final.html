@@ -532,7 +532,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-date-format';
+const SBA_APP_VERSION = 'sba25-2026-08-25-date-dd-mmm-yyyy';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -2033,7 +2033,10 @@ function saveCompanyEdit() {
     const actualKey = canonMap[f] || (headerMap[f] !== undefined ? f : null);
     if (actualKey != null && headerMap[actualKey] !== undefined) {
       let v = el.value;
-      if (f === 'plan_by_when' || f === 'executed_date' || f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
+      if (f === 'plan_by_when' || f === 'executed_date') {
+        // Human-readable on Drive: 24-Aug-2026
+        if (v) v = formatDateDDMMMYYYY(v);
+      } else if (f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
         const serial = toExcelDateSerial(v);
         if (serial != null) v = serial;
       }
@@ -2167,13 +2170,14 @@ function saveCompany() {
   // Top-10 plan fields (Opportunities ≠ Opportunity Summary / Notes)
   setVal('opportunities', g('acOpportunities'));
   setVal('support_needed', g('acSupport'));
-  setVal('plan_by_when', toExcelDateSerial(g('acPlanWhen')) ?? g('acPlanWhen'));
+  // Display text dates (24-Aug-2026) — reliable on Google Drive / Sheets
+  if (g('acPlanWhen')) setVal('plan_by_when', formatDateDDMMMYYYY(g('acPlanWhen')));
   // Executed sale (one product line per company on Sales Tracker)
   setVal('executed_product', g('acExecProduct'));
   setVal('executed_uom', g('acExecUom'));
   const execQty = g('acExecQty');
   if (execQty !== '') setVal('executed_quantity', parseFloat(execQty) || 0);
-  setVal('executed_date', toExcelDateSerial(g('acExecDate')) ?? g('acExecDate'));
+  if (g('acExecDate')) setVal('executed_date', formatDateDDMMMYYYY(g('acExecDate')));
 
   // Robust duplicate guard
   const nameKey = canonMap['name'] || 'company' || 'name';
@@ -2383,7 +2387,8 @@ async function ensureDateStyleId(zip) {
     if (n >= maxCustomId) maxCustomId = n + 1;
   });
   const newFmtId = maxCustomId;
-  const dateFmtXml = '<numFmt numFmtId="' + newFmtId + '" formatCode="yyyy-mm-dd"/>';
+  // dd-mmm-yyyy → e.g. 24-Aug-2026
+  const dateFmtXml = '<numFmt numFmtId="' + newFmtId + '" formatCode="dd-mmm-yyyy"/>';
 
   if (/<numFmts[^>]*count="(\d+)"/.test(xml)) {
     xml = xml.replace(/(<numFmts[^>]*count=")(\d+)(")/, function(_, a, c, b) {
@@ -2429,18 +2434,28 @@ async function ensureDateStyleId(zip) {
 }
 function toExcelDateSerial(val) {
   if (val === '' || val === undefined || val === null) return null;
-  if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) return val;
+  if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) return Math.round(val);
   const s = String(val).trim();
+  const monMap = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
   let y, mo, d;
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-  else {
-    m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-    if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+  let m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (m && monMap[m[2].toLowerCase()]) {
+    d = +m[1]; mo = monMap[m[2].toLowerCase()]; y = +m[3];
+  } else {
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
     else {
-      const dt = new Date(s);
-      if (isNaN(dt.getTime())) return null;
-      y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
+      m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+      if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; }
+      else if (/^\d{5}(\.\d+)?$/.test(s)) {
+        const n = parseFloat(s);
+        if (n > 20000 && n < 100000) return Math.round(n);
+        return null;
+      } else {
+        const dt = new Date(s);
+        if (isNaN(dt.getTime())) return null;
+        y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
+      }
     }
   }
   if (!y || !mo || !d) return null;
@@ -2448,8 +2463,29 @@ function toExcelDateSerial(val) {
   const epoch = Date.UTC(1899, 11, 30);
   return Math.round((utc - epoch) / 86400000);
 }
+
+/** Display form: 24-Aug-2026 */
+function formatDateDDMMMYYYY(val) {
+  const serial = toExcelDateSerial(val);
+  if (serial == null) return '';
+  const utc = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return utc.getUTCDate() + '-' + months[utc.getUTCMonth()] + '-' + utc.getUTCFullYear();
+}
+
+/** Executed Date / Plan By When — write as text so Drive always shows 24-Aug-2026 */
+function isDisplayTextDateField(key) {
+  const k = String(key || '').toLowerCase();
+  return k === 'executed_date' || k === 'exec_date' || k === 'sale_date' || k === 'order_date' ||
+    k === 'plan_by_when' || k === 'by_when' || k === 'plan_when' || k === 'target_date' || k === 'deadline';
+}
+
 function coerceValueForExcel(key, val) {
   if (val === '' || val === undefined || val === null) return val;
+  if (isDisplayTextDateField(key)) {
+    const disp = formatDateDDMMMYYYY(val);
+    return disp || val;
+  }
   if (isDateFieldKey(key)) {
     const serial = toExcelDateSerial(val);
     if (serial != null) return serial;
@@ -2469,7 +2505,9 @@ function ssEl(doc, localName) {
 
 // Decide whether a value for a given field key should be written as text.
 function shouldForceText(fieldKey, val) {
-  if (isDateFieldKey(fieldKey)) return false; // must stay numeric serial
+  // Executed Date / Plan By When → human text "24-Aug-2026" (reliable on Drive)
+  if (isDisplayTextDateField(fieldKey)) return true;
+  if (isDateFieldKey(fieldKey)) return false; // first/last/follow-up stay numeric serial
   if (FORCE_TEXT_FIELDS.has(fieldKey)) return true;
   if (/phone|mobile|tel|name|status|stage|priority|industry|location|contact|note|brand|application/i.test(fieldKey)
       && !isDateFieldKey(fieldKey)) return true;
@@ -2967,8 +3005,10 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
       if (key === 'name' || key === 'company_name' || key === 'company') {
         addedCompanyName = String(val);
       }
-      // Ensure date fields are numeric serials
-      if (isDateFieldKey(key)) {
+      if (isDisplayTextDateField(key)) {
+        const disp = formatDateDDMMMYYYY(val);
+        if (disp) val = disp;
+      } else if (isDateFieldKey(key)) {
         const serial = toExcelDateSerial(val);
         if (serial != null) val = serial;
       }
@@ -3149,8 +3189,11 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
       return;
     }
     val = coerceValueForExcel(key, val);
-    // Dates from form may still be long Date.toString() — force serial when field is date
-    if (isDateFieldKey(key)) {
+    // Executed Date / Plan By When → "24-Aug-2026" text for Drive display
+    if (isDisplayTextDateField(key)) {
+      const disp = formatDateDDMMMYYYY(val);
+      if (disp) val = disp;
+    } else if (isDateFieldKey(key)) {
       const serial = toExcelDateSerial(val);
       if (serial != null) val = serial;
     }
