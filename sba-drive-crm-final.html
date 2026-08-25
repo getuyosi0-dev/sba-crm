@@ -309,7 +309,8 @@ body { padding-bottom: 80px; }
       <span>Top 10 by Priority Score</span>
       <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score. Columns: Opportunities, Support Needed, Plan By When (from Sales Tracker).</p>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score (Won / Lost / No Opportunity excluded). Columns: Opportunities, Support Needed, Plan By When.</p>
+    <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
   </div>
 
@@ -595,7 +596,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-total-delete';
+const SBA_APP_VERSION = 'sba25-2026-08-25-rank-open-only';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1451,6 +1452,31 @@ function refreshTop10Table() {
   if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
   renderTop10Table(getCompaniesFromWorkbook());
   showToast('Top 10 refreshed', 'success');
+}
+
+/** One-click: rewrite Rank formulas (open deals only) + Dashboard Critical+High, save to Drive. */
+async function fixExcelOpenDealRanking() {
+  if (!workbook || !originalArrayBuffer) {
+    showToast('Open a workbook first', 'warning');
+    return;
+  }
+  if (!accessToken) {
+    showToast('Sign in to save the fix to Drive', 'error');
+    return;
+  }
+  try {
+    showToast('Updating Rank formulas (Won excluded from Top 10)…', 'success');
+    generateSafeWorkbookBuffer._forceRankFix = true;
+    const ok = await saveToDrive({ silent: false });
+    generateSafeWorkbookBuffer._forceRankFix = false;
+    if (ok !== false) {
+      showToast('Saved. Open the file in Excel/Sheets once so Top 10 recalculates (Won will drop off).', 'success');
+    }
+  } catch (e) {
+    generateSafeWorkbookBuffer._forceRankFix = false;
+    console.error(e);
+    showToast('Fix failed: ' + (e.message || e), 'error');
+  }
 }
 
 function getExecPeriodRange(mode, refDate) {
@@ -3589,9 +3615,77 @@ function builtInFormulaForKey(key, rowNum) {
     return "IF(A" + r + '="","",IF(J' + r + '="Won","Closed - Won",IF(J' + r + '="Lost","Closed - Lost",IF(J' + r + '="No Opportunity","Closed - No Opportunity",IF(AND(Q' + r + '<>"",Q' + r + '<TODAY()),"Overdue",IF(J' + r + '="Proposal Sent","Proposal Outstanding",IF(OR(J' + r + '="Technical Discussion",J' + r + '="Demo / Sample"),"Technical Discussion",IF(OR(J' + r + '="Waiting Customer Decision",J' + r + '="Negotiation"),"Waiting Customer","Needs Follow-up"))))))))';
   }
   if (k === 'rank_helper' || k === 'rank') {
-    return 'IF(A' + r + '="","",RANK(N' + r + ',$N$2:$N$473)+COUNTIF($N$2:N' + r + ',N' + r + ')-1)';
+    // Rank only OPEN deals (exclude Won / Lost / No Opportunity) so Excel Dashboard Top 10
+    // never treats closed wins as opportunities. Dense rank among open by Priority Score (N).
+    return 'IF(OR(A' + r + '="",OR(J' + r + '="Won",J' + r + '="Lost",J' + r + '="No Opportunity")),"",' +
+      'SUMPRODUCT(($A$2:$A$500<>"")*($J$2:$J$500<>"Won")*($J$2:$J$500<>"Lost")*($J$2:$J$500<>"No Opportunity")*($N$2:$N$500>N' + r + '))+1)';
   }
   return null;
+}
+
+/** Rewrite Rank (helper) formulas on Sales Tracker so closed stages get blank rank. */
+function patchOpenOnlyRankFormulas(doc, sheetDataEl, headerColMap) {
+  let rankCol = headerColMap['rank_helper'];
+  if (rankCol === undefined) rankCol = headerColMap['rank'];
+  if (rankCol === undefined) return 0;
+  let n = 0;
+  ssChildren(sheetDataEl, 'row').forEach(function(rowEl) {
+    const rowNum = parseInt(rowEl.getAttribute('r'), 10);
+    if (!rowNum || rowNum < 2) return;
+    const colRef = colLetters(rankCol) + rowNum;
+    let cellEl = ssChildren(rowEl, 'c').find(function(c) { return c.getAttribute('r') === colRef; });
+    const formula = builtInFormulaForKey('rank_helper', rowNum);
+    if (!formula) return;
+    if (!cellEl) {
+      cellEl = ssEl(doc, 'c');
+      cellEl.setAttribute('r', colRef);
+      insertCellInOrder(rowEl, cellEl, rankCol);
+    } else {
+      while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
+      cellEl.removeAttribute('t');
+    }
+    const fEl = ssEl(doc, 'f');
+    fEl.textContent = formula.replace(/^=/, '');
+    cellEl.appendChild(fEl);
+    n++;
+  });
+  console.log('[SBA] Patched open-only Rank formulas on', n, 'rows');
+  return n;
+}
+
+/** Dashboard Critical+High should count open deals only (same idea as Active). */
+async function patchDashboardOpenMetrics(zip) {
+  const { sheetNameToPath } = await loadZipParts(zip);
+  const dashName = Object.keys(sheetNameToPath).find(function(n) { return /dashboard/i.test(n); });
+  if (!dashName) return;
+  const sheetPath = sheetNameToPath[dashName];
+  if (!sheetPath || !zip.file(sheetPath)) return;
+  let xml = await zip.file(sheetPath).async('string');
+  const before = xml;
+  // Critical + High open only (column O = Priority, J = Stage) — replace simple COUNTIF pair if present
+  const openCritHigh =
+    "COUNTIFS('Sales Tracker'!$O$2:$O$500,\"Critical\",'Sales Tracker'!$J$2:$J$500,\"<>Won\",'Sales Tracker'!$J$2:$J$500,\"<>Lost\",'Sales Tracker'!$J$2:$J$500,\"<>No Opportunity\")+" +
+    "COUNTIFS('Sales Tracker'!$O$2:$O$500,\"High\",'Sales Tracker'!$J$2:$J$500,\"<>Won\",'Sales Tracker'!$J$2:$J$500,\"<>Lost\",'Sales Tracker'!$J$2:$J$500,\"<>No Opportunity\")";
+  // Common pattern for D7
+  xml = xml.replace(
+    /=COUNTIF\('Sales Tracker'!O2:O475,"Critical"\)\+COUNTIF\('Sales Tracker'!O2:O475,"High"\)/g,
+    '=' + openCritHigh
+  );
+  xml = xml.replace(
+    /=COUNTIF\('Sales Tracker'!\$O\$2:\$O\$475,"Critical"\)\+COUNTIF\('Sales Tracker'!\$O\$2:\$O\$475,"High"\)/g,
+    '=' + openCritHigh
+  );
+  // Also unescaped XML entities sometimes
+  xml = xml.replace(
+    /=COUNTIF\('Sales Tracker'!\$O\$2:\$O\$475,&quot;Critical&quot;\)\+COUNTIF\('Sales Tracker'!\$O\$2:\$O\$475,&quot;High&quot;\)/g,
+    '=' + openCritHigh.replace(/"/g, '&quot;')
+  );
+  if (xml !== before) {
+    zip.file(sheetPath, xml);
+    console.log('[SBA] Dashboard Critical+High formula updated to exclude Won/Lost/No Opportunity');
+  } else {
+    console.log('[SBA] Dashboard Critical+High formula left as-is (pattern not found or already updated)');
+  }
 }
 
 
@@ -4106,7 +4200,9 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
 // one code path, per the requirement that they never diverge.
 async function generateSafeWorkbookBuffer() {
   if (!originalArrayBuffer) throw new Error('no original file loaded');
-  if (pendingEdits.length === 0) return originalArrayBuffer; // nothing changed — hand back the untouched original bytes verbatim
+  // Even with no cell edits, allow a structural formula fix pass when requested
+  const forceFormulaFix = !!(generateSafeWorkbookBuffer._forceRankFix);
+  if (pendingEdits.length === 0 && !forceFormulaFix) return originalArrayBuffer;
 
   const zip = await JSZip.loadAsync(originalArrayBuffer);
   // Clear per-save cache so style index matches this workbook
@@ -4240,9 +4336,63 @@ async function generateSafeWorkbookBuffer() {
 
     }
 
+    // Always keep Rank (helper) open-deal-only so Excel Dashboard Top 10 ignores Won/Lost
+    if (/sales\s*tracker|customer/i.test(sheetName) || sheetName === findTargetSheetName()) {
+      try { patchOpenOnlyRankFormulas(doc, sheetDataEl, headerColMap); } catch (e) {
+        console.warn('[SBA] Rank patch failed', e);
+      }
+    }
+
     if (tableInfo && tableInfo.ref) expectedTableRefs[sheetPath] = tableInfo.ref;
     zip.file(sheetPath, serializeXmlDoc(doc, xmlStr));
   }
+
+  // Force Rank fix when user requested it with no pending data edits
+  if (forceFormulaFix) {
+    const target = findTargetSheetName();
+    if (target && !bySheet[target]) {
+      const sheetPath = sheetNameToPath[target];
+      if (sheetPath && zip.file(sheetPath)) {
+        const xmlStr = await zip.file(sheetPath).async('string');
+        const doc = new DOMParser().parseFromString(xmlStr, 'application/xml');
+        const sheetDataEl = ssFirst(doc, 'sheetData') || doc.getElementsByTagName('sheetData')[0];
+        if (sheetDataEl) {
+          let headerExcelRow = 1;
+          const headerColMap = {};
+          try {
+            const sheet = workbook && workbook.Sheets[target];
+            if (sheet) {
+              const info = getSheetAoaInfo(sheet);
+              headerExcelRow = (info.headerRowIndex || 0) + 1;
+              (info.headers || []).forEach(function(h, i) {
+                const key = normalizeHeader(h);
+                if (key) headerColMap[key] = i;
+              });
+            }
+          } catch (e) {}
+          const headerRow = findRowEl(sheetDataEl, headerExcelRow);
+          if (headerRow) {
+            ssChildren(headerRow, 'c').forEach(function(c) {
+              const ref = colIndexFromRef(c.getAttribute('r'));
+              if (!ref) return;
+              const text = cellText(c, sharedStrings);
+              if (text) headerColMap[normalizeHeader(text)] = ref.col;
+            });
+          }
+          Object.keys(FIELD_ALIASES).forEach(function(canon) {
+            if (headerColMap[canon] !== undefined) return;
+            for (const a of FIELD_ALIASES[canon]) {
+              if (headerColMap[a] !== undefined) { headerColMap[canon] = headerColMap[a]; break; }
+            }
+          });
+          patchOpenOnlyRankFormulas(doc, sheetDataEl, headerColMap);
+          zip.file(sheetPath, serializeXmlDoc(doc, xmlStr));
+        }
+      }
+    }
+  }
+
+  try { await patchDashboardOpenMetrics(zip); } catch (e) { console.warn('[SBA] Dashboard metric patch failed', e); }
 
   touchedTablePaths.forEach(sheetPath => {
     const tableInfo = tableInfoCache[sheetPath];
