@@ -532,7 +532,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-opportunities-separate';
+const SBA_APP_VERSION = 'sba25-2026-08-25-date-format';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -2320,9 +2320,112 @@ function isNumericLike(val) { return /^-?\d+(\.\d+)?$/.test(String(val).trim());
 // (days since 1899-12-30). Writing text dates breaks Days-Since-Last-Visit etc.
 function isDateFieldKey(key) {
   const k = String(key || '').toLowerCase();
+  // Explicit Top-10 / executed fields (may not contain the word "date")
+  if (k === 'plan_by_when' || k === 'by_when' || k === 'plan_when') return true;
   if (k.indexOf('date') === -1) return false;
   if (k.indexOf('update') !== -1) return false;
   return true;
+}
+
+/**
+ * Ensure xl/styles.xml has a cellXf that formats numbers as dates (YYYY-MM-DD).
+ * Returns the 0-based style index to put on <c s="...">.
+ * Built-in numFmtId 14 = mm-dd-yy; we also add a custom yyyy-mm-dd if needed.
+ */
+async function ensureDateStyleId(zip) {
+  if (ensureDateStyleId._cached != null) return ensureDateStyleId._cached;
+  const stylesFile = zip.file('xl/styles.xml');
+  if (!stylesFile) {
+    console.warn('[SBA] No styles.xml — dates will show as serial numbers');
+    return null;
+  }
+  let xml = await stylesFile.async('string');
+
+  // Prefer an existing cellXf that already uses a date numFmt (14–22 or custom with y/m/d)
+  const numFmtMap = {}; // id -> formatCode
+  const nfRe = /<numFmt[^>]*numFmtId="(\d+)"[^>]*formatCode="([^"]*)"/g;
+  let m;
+  while ((m = nfRe.exec(xml))) numFmtMap[m[1]] = m[2];
+  // also formatCode before numFmtId
+  const nfRe2 = /<numFmt[^>]*formatCode="([^"]*)"[^>]*numFmtId="(\d+)"/g;
+  while ((m = nfRe2.exec(xml))) numFmtMap[m[2]] = m[1];
+
+  const isDateFmt = function(code, id) {
+    const n = parseInt(id, 10);
+    if (n >= 14 && n <= 22) return true; // built-in date/time formats
+    if (!code) return false;
+    const c = code.toLowerCase();
+    return (c.indexOf('y') !== -1 || c.indexOf('d') !== -1) && c.indexOf('h') === -1;
+  };
+
+  // Scan cellXfs for a date style
+  const xfsBlock = xml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/);
+  if (xfsBlock) {
+    const xfRe = /<xf\b[^>]*>/g;
+    let idx = 0;
+    let xm;
+    while ((xm = xfRe.exec(xfsBlock[1]))) {
+      const tag = xm[0];
+      const nf = tag.match(/numFmtId="(\d+)"/);
+      if (nf && isDateFmt(numFmtMap[nf[1]], nf[1])) {
+        ensureDateStyleId._cached = idx;
+        console.log('[SBA] Reusing existing date style index', idx, 'numFmtId', nf[1]);
+        return idx;
+      }
+      idx++;
+    }
+  }
+
+  // Append custom numFmt yyyy-mm-dd and a cellXf that uses it
+  let maxCustomId = 164;
+  Object.keys(numFmtMap).forEach(function(id) {
+    const n = parseInt(id, 10);
+    if (n >= maxCustomId) maxCustomId = n + 1;
+  });
+  const newFmtId = maxCustomId;
+  const dateFmtXml = '<numFmt numFmtId="' + newFmtId + '" formatCode="yyyy-mm-dd"/>';
+
+  if (/<numFmts[^>]*count="(\d+)"/.test(xml)) {
+    xml = xml.replace(/(<numFmts[^>]*count=")(\d+)(")/, function(_, a, c, b) {
+      return a + (parseInt(c, 10) + 1) + b;
+    });
+    xml = xml.replace(/<numFmts([^>]*)>/, function(tag) {
+      return tag + dateFmtXml;
+    });
+  } else if (/<styleSheet[^>]*>/.test(xml)) {
+    xml = xml.replace(/(<styleSheet[^>]*>)/, '$1<numFmts count="1">' + dateFmtXml + '</numFmts>');
+  }
+
+  // Append cellXf — copy font/fill/border from xf 0 if possible
+  let fontId = 0, fillId = 0, borderId = 0;
+  const firstXf = xml.match(/<cellXfs[^>]*>\s*<xf\b([^>]*)>/);
+  if (firstXf) {
+    const fm = firstXf[1].match(/fontId="(\d+)"/);
+    const fl = firstXf[1].match(/fillId="(\d+)"/);
+    const bd = firstXf[1].match(/borderId="(\d+)"/);
+    if (fm) fontId = fm[1];
+    if (fl) fillId = fl[1];
+    if (bd) borderId = bd[1];
+  }
+  const newXf = '<xf numFmtId="' + newFmtId + '" fontId="' + fontId + '" fillId="' + fillId +
+    '" borderId="' + borderId + '" xfId="0" applyNumberFormat="1"/>';
+
+  let newIndex = 0;
+  if (/<cellXfs[^>]*count="(\d+)"/.test(xml)) {
+    xml = xml.replace(/(<cellXfs[^>]*count=")(\d+)(")/, function(_, a, c, b) {
+      newIndex = parseInt(c, 10);
+      return a + (newIndex + 1) + b;
+    });
+    xml = xml.replace(/<\/cellXfs>/, newXf + '</cellXfs>');
+  } else {
+    console.warn('[SBA] Could not find cellXfs to append date style');
+    return null;
+  }
+
+  zip.file('xl/styles.xml', xml);
+  ensureDateStyleId._cached = newIndex;
+  console.log('[SBA] Created date style index', newIndex, 'numFmtId', newFmtId, 'format yyyy-mm-dd');
+  return newIndex;
 }
 function toExcelDateSerial(val) {
   if (val === '' || val === undefined || val === null) return null;
@@ -2607,7 +2710,7 @@ function serializeXmlDoc(doc, originalXmlStr) {
 
 // Inserts one new row using the last existing data row as a formatting/
 // formula template. Returns the new company's name (for save validation).
-function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferredExcelRow) {
+function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferredExcelRow, dateStyleId) {
   let totalsRowEl = null, templateRowNum, newRowNum;
 
   // Name column — only treat a row as occupied if column A (or name col) has a real value text
@@ -2831,8 +2934,10 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
 
     const newCell = ssEl(doc, 'c');
     newCell.setAttribute('r', colRef);
-    const styleId = findColStyle(col);
-    if (styleId != null) newCell.setAttribute('s', styleId);
+    let styleId = findColStyle(col);
+    // New columns (Executed Date, Plan By When) often have no sample style — apply workbook date format
+    if (styleId == null && isDateFieldKey(key) && dateStyleId != null) styleId = dateStyleId;
+    if (styleId != null) newCell.setAttribute('s', String(styleId));
 
     // Build formula text: resolve shared formulas, else built-in template for calc columns
     let formulaText = '';
@@ -2861,6 +2966,11 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     } else if (hasValue) {
       if (key === 'name' || key === 'company_name' || key === 'company') {
         addedCompanyName = String(val);
+      }
+      // Ensure date fields are numeric serials
+      if (isDateFieldKey(key)) {
+        const serial = toExcelDateSerial(val);
+        if (serial != null) val = serial;
       }
       console.log('[SBA] Write col', colLetters(col) + newRowNum, 'key=' + key, 'val=' + val);
       if (!shouldForceText(key, val) && isNumericLike(val)) {
@@ -2992,7 +3102,7 @@ function expandDataValidations(doc, oldLastRow, newLastRow) {
 
 // Edits values in an existing row. Never overwrites a cell that already
 // contains a formula — that's the "preserve formulas as formulas" rule.
-function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRowOverride) {
+function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRowOverride, dateStyleId) {
   // rowIndex is AOA index from sheet_to_json (0 = Excel row 1). Prefer explicit excelRow when provided.
   const rowNum = excelRowOverride || (rowIndex + 1);
   let rowEl = findRowEl(sheetDataEl, rowNum);
@@ -3053,14 +3163,20 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
       while (cellEl.firstChild) cellEl.removeChild(cellEl.firstChild);
       cellEl.removeAttribute('t');
     }
-    if (isDateFieldKey(key) && !cellEl.hasAttribute('s')) {
-      const rows = ssChildren(rowEl.parentNode, 'row');
-      for (let i = 0; i < Math.min(rows.length, 40); i++) {
-        const sample = ssChildren(rows[i], 'c').find(function(c) {
-          const r = colIndexFromRef(c.getAttribute('r'));
-          return r && r.col === col && c.hasAttribute('s');
-        });
-        if (sample) { cellEl.setAttribute('s', sample.getAttribute('s')); break; }
+    if (isDateFieldKey(key)) {
+      // Prefer a style already used in this column; else fall back to workbook date style
+      if (!cellEl.hasAttribute('s')) {
+        const rows = ssChildren(rowEl.parentNode, 'row');
+        for (let i = 0; i < Math.min(rows.length, 40); i++) {
+          const sample = ssChildren(rows[i], 'c').find(function(c) {
+            const r = colIndexFromRef(c.getAttribute('r'));
+            return r && r.col === col && c.hasAttribute('s');
+          });
+          if (sample) { cellEl.setAttribute('s', sample.getAttribute('s')); break; }
+        }
+      }
+      if (!cellEl.hasAttribute('s') && dateStyleId != null) {
+        cellEl.setAttribute('s', String(dateStyleId));
       }
     }
 
@@ -3094,6 +3210,9 @@ async function generateSafeWorkbookBuffer() {
   if (pendingEdits.length === 0) return originalArrayBuffer; // nothing changed — hand back the untouched original bytes verbatim
 
   const zip = await JSZip.loadAsync(originalArrayBuffer);
+  // Clear per-save cache so style index matches this workbook
+  ensureDateStyleId._cached = null;
+  const dateStyleId = await ensureDateStyleId(zip);
   const { sheetNameToPath, allSheetNames } = await loadZipParts(zip);
   const sharedStrings = await loadSharedStrings(zip);
 
@@ -3206,7 +3325,7 @@ async function generateSafeWorkbookBuffer() {
 
     for (const edit of adds) {
       console.log('[SBA] Applying ADD to "' + sheetName + '" values:', edit.values, 'preferredExcelRow:', edit.preferredExcelRow);
-      const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo, edit.preferredExcelRow);
+      const newName = applyAddRow(doc, sheetDataEl, headerColMap, edit.values, tableInfo, edit.preferredExcelRow, dateStyleId);
       if (newName) addedCompanyNames.push(String(newName));
       else {
         // Fallback: use expected name from values so validation still runs
@@ -3217,7 +3336,7 @@ async function generateSafeWorkbookBuffer() {
       if (tableInfo) touchedTablePaths.add(sheetPath);
     }
     for (const edit of edits) {
-      const writes = applyEditRow(doc, sheetDataEl, headerColMap, edit.rowIndex, edit.values, edit.excelRow);
+      const writes = applyEditRow(doc, sheetDataEl, headerColMap, edit.rowIndex, edit.values, edit.excelRow, dateStyleId);
       if (!writes) console.warn('[SBA] Edit applied 0 cells for rowIndex', edit.rowIndex, 'excelRow', edit.excelRow, edit.values);
 
     }
