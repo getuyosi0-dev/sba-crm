@@ -330,6 +330,34 @@ body { padding-bottom: 80px; }
     <div id="executedSalesList" style="overflow-x:auto;"></div>
   </div>
 
+  <div class="card" id="pptReportCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">PowerPoint Report</div>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">
+      Fills your SBA template with <strong>Top 10</strong> (priority score) and <strong>Executed Sales</strong> for the selected period, plus summary KPIs.
+      Upload the placeholder template once (Drive or this device).
+    </p>
+    <div id="pptTemplateStatus" style="font-size:12px;margin-bottom:10px;padding:8px 10px;background:var(--bg);border-radius:8px;">No template linked yet.</div>
+    <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">
+      Easiest: use <strong>Upload template (.pptx)</strong> and pick the file from your phone/computer
+      (e.g. <code>SBA_Sales_Report_Template_PLACEHOLDERS.pptx</code>). Drive picker is optional.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+      <label class="btn btn-primary btn-sm" style="width:auto;margin:0;cursor:pointer;">
+        Upload template (.pptx)
+        <input type="file" id="pptTemplateFileInput" accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.ms-powerpoint" style="display:none;" onchange="onPptTemplateFileChosen(event)">
+      </label>
+      <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="pickPptTemplateFromDrive()">Select from Drive</button>
+    </div>
+    <div class="filter-bar" id="pptPeriodBar" style="margin-bottom:10px;">
+      <button type="button" class="filter-chip active" data-ppt-period="month" onclick="setPptPeriod('month')">This month</button>
+      <button type="button" class="filter-chip" data-ppt-period="3m" onclick="setPptPeriod('3m')">3 months</button>
+      <button type="button" class="filter-chip" data-ppt-period="6m" onclick="setPptPeriod('6m')">6 months</button>
+      <button type="button" class="filter-chip" data-ppt-period="year" onclick="setPptPeriod('year')">This year</button>
+    </div>
+    <button type="button" class="btn btn-primary" onclick="generatePptReport()">Generate PowerPoint</button>
+    <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">Downloads a filled .pptx. SWOT text is left as placeholders unless you edit those in the template.</p>
+  </div>
+
   <div class="card" id="otherMetricsCard" style="display:none;margin-bottom:12px;">
     <div class="card-title">Other Metrics</div>
     <div id="otherMetrics" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;"></div>
@@ -553,7 +581,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-top10-exec-tables';
+const SBA_APP_VERSION = 'sba25-2026-08-25-ppt-picker-fix';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1036,7 +1064,7 @@ function updateFileUI() {
     const info = document.getElementById('fileInfoCard');
     if (noFile) noFile.style.display = 'block';
     if (info) info.style.display = 'none';
-    ['kpiSection', 'quickActions', 'recentActivityCard', 'pipelineCard', 'priorityCard', 'trendCard', 'top10Card', 'otherMetricsCard'].forEach(function(id) {
+    ['kpiSection', 'quickActions', 'recentActivityCard', 'pipelineCard', 'priorityCard', 'trendCard', 'top10Card', 'executedSalesCard', 'pptReportCard', 'otherMetricsCard'].forEach(function(id) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
@@ -1562,6 +1590,313 @@ function refreshExecutedSalesTable() {
   showToast('Executed sales refreshed', 'success');
 }
 
+// ==================== POWERPOINT REPORT ====================
+let pptPeriodMode = 'month';
+let pptTemplateMeta = null; // { id, name } from Drive or { name, local: true }
+let pptTemplateBuffer = null; // ArrayBuffer of .pptx template
+
+function setPptPeriod(mode) {
+  pptPeriodMode = mode || 'month';
+  document.querySelectorAll('#pptPeriodBar .filter-chip').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-ppt-period') === pptPeriodMode);
+  });
+}
+
+function updatePptTemplateStatus() {
+  const el = document.getElementById('pptTemplateStatus');
+  if (!el) return;
+  try {
+    if (!pptTemplateMeta) {
+      const raw = localStorage.getItem('sba_ppt_template');
+      if (raw) pptTemplateMeta = JSON.parse(raw);
+    }
+  } catch (e) {}
+  if (pptTemplateBuffer && pptTemplateMeta) {
+    el.innerHTML = '<strong>Template ready:</strong> ' + escapeHtml(pptTemplateMeta.name || 'template.pptx') +
+      (pptTemplateMeta.local ? ' (this device)' : ' (Drive)');
+  } else if (pptTemplateMeta && pptTemplateMeta.id) {
+    el.innerHTML = '<strong>Template linked:</strong> ' + escapeHtml(pptTemplateMeta.name || pptTemplateMeta.id) +
+      ' — will download from Drive when you generate.';
+  } else {
+    el.textContent = 'No template linked yet. Select the placeholder .pptx from Drive or upload it.';
+  }
+}
+
+function pickPptTemplateFromDrive() {
+  if (!accessToken) { showToast('Please sign in first', 'error'); return; }
+  if (typeof google === 'undefined' || !google.picker) {
+    showToast('Google Picker not loaded — use Upload template instead', 'error');
+    return;
+  }
+  // Broad views: strict mime filters often hide .pptx in the picker
+  const pptMimes = [
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.google-apps.presentation'
+  ].join(',');
+  const viewPpt = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(false)
+    .setMimeTypes(pptMimes);
+  const viewAll = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(false)
+    .setMode(google.picker.DocsViewMode.LIST);
+  const uploadView = new google.picker.DocsUploadView().setIncludeFolders(true);
+  const picker = new google.picker.PickerBuilder()
+    .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
+    .setAppId(CLIENT_ID.split('-')[0])
+    .setOAuthToken(accessToken)
+    .setDeveloperKey(API_KEY)
+    .setTitle('Select SBA PowerPoint template (.pptx)')
+    .addView(viewPpt)
+    .addView(viewAll)
+    .addView(uploadView)
+    .setCallback(function(data) {
+      if (data.action !== google.picker.Action.PICKED) return;
+      const file = data.docs[0];
+      const mime = String(file.mimeType || '');
+      const name = String(file.name || '');
+      if (mime.indexOf('google-apps.presentation') !== -1) {
+        showToast('Use a .pptx file, not Google Slides. In Drive: File → Download → Microsoft PowerPoint (.pptx).', 'error');
+        return;
+      }
+      pptTemplateMeta = { id: file.id, name: name, mimeType: mime };
+      pptTemplateBuffer = null;
+      try { localStorage.setItem('sba_ppt_template', JSON.stringify(pptTemplateMeta)); } catch (e) {}
+      updatePptTemplateStatus();
+      showToast('Template linked: ' + name + ' — downloading…', 'success');
+      loadPptTemplateBuffer().then(function() {
+        updatePptTemplateStatus();
+        showToast('Template ready: ' + name, 'success');
+      }).catch(function(err) {
+        console.error('[SBA] template download', err);
+        showToast('Could not download template: ' + (err.message || err) + '. Try Upload template instead.', 'error');
+      });
+    })
+    .build();
+  picker.setVisible(true);
+}
+
+function onPptTemplateFileChosen(ev) {
+  const file = ev.target && ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function() {
+    pptTemplateBuffer = reader.result;
+    pptTemplateMeta = { name: file.name, local: true };
+    try { localStorage.removeItem('sba_ppt_template'); } catch (e) {}
+    updatePptTemplateStatus();
+    showToast('Template loaded: ' + file.name, 'success');
+  };
+  reader.onerror = function() { showToast('Failed to read template file', 'error'); };
+  reader.readAsArrayBuffer(file);
+  ev.target.value = '';
+}
+
+async function loadPptTemplateBuffer() {
+  if (pptTemplateBuffer) return pptTemplateBuffer;
+  if (!pptTemplateMeta || !pptTemplateMeta.id) {
+    throw new Error('No PowerPoint template selected');
+  }
+  if (!accessToken) throw new Error('Sign in to download the template from Drive');
+  const res = await driveFetch('https://www.googleapis.com/drive/v3/files/' + pptTemplateMeta.id + '?alt=media');
+  if (!res.ok) {
+    const reason = await interpretDriveError(res, 'download');
+    throw new Error(reason || ('HTTP ' + res.status));
+  }
+  pptTemplateBuffer = await res.arrayBuffer();
+  return pptTemplateBuffer;
+}
+
+function buildPptPlaceholderMap(periodMode) {
+  const companies = getCompaniesFromWorkbook().filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim())
+      && String(c.name).indexOf('——') !== 0;
+  });
+  const range = getExecPeriodRange(periodMode || pptPeriodMode);
+  const top10 = computeTop10ByPriority(companies);
+  const execPack = computeExecutedSales(companies, periodMode || pptPeriodMode);
+  const execRows = execPack.rows || [];
+
+  // Touches = Last Contact in period
+  let touches = 0;
+  companies.forEach(function(c) {
+    const d = parseCompanyDate(c.last_contact_date) || (typeof excelSerialToDate === 'function' ? excelSerialToDate(c.last_contact_date) : null);
+    if (!d) return;
+    if (range.start && range.end) {
+      const t = d.getTime();
+      if (t >= range.start.getTime() && t <= range.end.getTime()) touches++;
+    } else touches++;
+  });
+
+  const active = companies.filter(function(c) { return !isClosedStage(c.sales_stage); }).length;
+  let critical = 0, high = 0, medium = 0, low = 0, criticalHigh = 0;
+  companies.forEach(function(c) {
+    if (isClosedStage(c.sales_stage)) return;
+    const p = companyPriorityLabel(c);
+    if (p === 'Critical') { critical++; criticalHigh++; }
+    else if (p === 'High') { high++; criticalHigh++; }
+    else if (p === 'Medium') medium++;
+    else low++;
+  });
+  const won = companies.filter(function(c) { return String(c.sales_stage || '') === 'Won'; }).length;
+  const lost = companies.filter(function(c) { return String(c.sales_stage || '') === 'Lost'; }).length;
+
+  const owner = (companies.find(function(c) { return c.sales_owner; }) || {}).sales_owner || 'Yosef Getu';
+
+  // Period labels
+  let period = range.label || '';
+  let periodShort = period;
+  if ((periodMode || pptPeriodMode) === 'month' && range.start) {
+    period = range.start.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+    periodShort = range.start.toLocaleString(undefined, { month: 'short' }) + ' ' + range.start.getFullYear();
+  } else if ((periodMode || pptPeriodMode) === 'year') {
+    period = String((range.start || new Date()).getFullYear());
+    periodShort = period;
+  } else if ((periodMode || pptPeriodMode) === '3m') {
+    period = 'Last 3 months';
+    periodShort = '3M';
+  } else if ((periodMode || pptPeriodMode) === '6m') {
+    period = 'Last 6 months';
+    periodShort = '6M';
+  }
+
+  const map = {
+    PERIOD: period,
+    PERIOD_SHORT: periodShort,
+    SALES_OWNER: owner,
+    ACTIVE_ACCOUNTS: String(active),
+    TOUCHES_IN_PERIOD: String(touches),
+    CRITICAL_HIGH: String(criticalHigh),
+    WON: String(won),
+    LOST: String(lost),
+    COUNT_CRITICAL: String(critical),
+    COUNT_HIGH: String(high),
+    COUNT_MEDIUM: String(medium),
+    COUNT_LOW: String(low),
+    EXEC_COUNT: String(execRows.length),
+    SWOT_STRENGTHS: '',
+    SWOT_WEAKNESSES: '',
+    SWOT_OPPORTUNITIES: '',
+    SWOT_THREATS: ''
+  };
+
+  for (let i = 1; i <= 10; i++) {
+    const item = top10[i - 1];
+    map['TOP_' + i + '_COMPANY'] = item ? String(item.c.name || '') : '';
+  }
+  for (let i = 1; i <= 4; i++) {
+    const r = execRows[i - 1];
+    map['EXEC_' + i + '_COMPANY'] = r ? String(r.company || '') : '';
+    map['EXEC_' + i + '_PRODUCT'] = r ? String(r.product === '—' ? '' : r.product) : '';
+    map['EXEC_' + i + '_UOM'] = r ? String(r.uom === '—' ? '' : r.uom) : '';
+    map['EXEC_' + i + '_QTY'] = r ? String(r.quantity === '—' ? '' : r.quantity) : '';
+  }
+  return map;
+}
+
+async function fillPptxPlaceholders(templateBuf, map) {
+  const zip = await JSZip.loadAsync(templateBuf);
+  const paths = Object.keys(zip.files).filter(function(p) {
+    return /^ppt\/(slides\/slide\d+|charts\/chart\d+|embeddings\/)/.test(p) && !zip.files[p].dir;
+  });
+  // Also always touch styles-free slide XML
+  const slidePaths = Object.keys(zip.files).filter(function(p) {
+    return /^ppt\/slides\/slide\d+\.xml$/.test(p);
+  });
+  const chartPaths = Object.keys(zip.files).filter(function(p) {
+    return /^ppt\/charts\/chart\d+\.xml$/.test(p);
+  });
+  const all = slidePaths.concat(chartPaths);
+
+  // Replace {{KEY}} even when PowerPoint splits runs across multiple <a:t> nodes:
+  // 1) simple full-string replace on each a:t
+  // 2) join consecutive a:t in a paragraph and replace spanning placeholders
+  function replaceInXml(xml) {
+    // Pass 1: whole-token inside a single text node
+    xml = xml.replace(/\{\{([A-Z0-9_]+)\}\}/g, function(_, key) {
+      return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : '';
+    });
+    // Pass 2: rebuild text across a:t siblings if any {{ remain (split runs)
+    if (xml.indexOf('{{') === -1) return xml;
+    xml = xml.replace(/(<a:t(?:\s[^>]*)?>)([\s\S]*?)(<\/a:t>)/g, function(full, open, text, close) {
+      const next = text.replace(/\{\{([A-Z0-9_]+)\}\}/g, function(_, key) {
+        return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : '';
+      });
+      return open + next + close;
+    });
+    return xml;
+  }
+
+  for (let i = 0; i < all.length; i++) {
+    const p = all[i];
+    try {
+      let xml = await zip.file(p).async('string');
+      const updated = replaceInXml(xml);
+      if (updated !== xml) zip.file(p, updated);
+    } catch (e) {
+      console.warn('[SBA] PPT skip', p, e);
+    }
+  }
+
+  // Embedded chart workbook (xlsx inside pptx)
+  const emb = Object.keys(zip.files).filter(function(p) {
+    return p.indexOf('ppt/embeddings/') === 0 && p.endsWith('.xlsx');
+  });
+  for (let i = 0; i < emb.length; i++) {
+    try {
+      const embBuf = await zip.file(emb[i]).async('arraybuffer');
+      const ezip = await JSZip.loadAsync(embBuf);
+      const ssPath = 'xl/sharedStrings.xml';
+      if (ezip.file(ssPath)) {
+        let ss = await ezip.file(ssPath).async('string');
+        ss = replaceInXml(ss);
+        ezip.file(ssPath, ss);
+      }
+      const sheetPath = 'xl/worksheets/sheet1.xml';
+      if (ezip.file(sheetPath)) {
+        let sh = await ezip.file(sheetPath).async('string');
+        sh = replaceInXml(sh);
+        ezip.file(sheetPath, sh);
+      }
+      const newEmb = await ezip.generateAsync({ type: 'arraybuffer' });
+      zip.file(emb[i], newEmb);
+    } catch (e) {
+      console.warn('[SBA] PPT embedding skip', emb[i], e);
+    }
+  }
+
+  return await zip.generateAsync({ type: 'arraybuffer' });
+}
+
+async function generatePptReport() {
+  if (!workbook) { showToast('Open your Sales Tracker workbook first', 'warning'); return; }
+  try {
+    showToast('Building PowerPoint…', 'success');
+    const buf = await loadPptTemplateBuffer();
+    const map = buildPptPlaceholderMap(pptPeriodMode);
+    console.log('[SBA] PPT placeholders', map);
+    const out = await fillPptxPlaceholders(buf, map);
+    const periodSlug = String(map.PERIOD || pptPeriodMode).replace(/[^\w\-]+/g, '_').slice(0, 40);
+    const name = 'SBA_Report_' + periodSlug + '.pptx';
+    const blob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Downloaded ' + name, 'success');
+  } catch (err) {
+    console.error('[SBA] PPT generate failed', err);
+    showToast('PowerPoint failed: ' + (err.message || err), 'error');
+  }
+}
+
 function companyTempBucket(c) {
   // Hot / Warm / Cold for UI badges (not Relationship Level text)
   const s = String(c.opp_status || '').toLowerCase();
@@ -1787,6 +2122,8 @@ function renderDashboard() {
   renderExecutedSalesTable(companies);
   if (el('top10Card')) el('top10Card').style.display = '';
   if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
+  if (el('pptReportCard')) el('pptReportCard').style.display = '';
+  updatePptTemplateStatus();
 
   // Other metrics
   const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
