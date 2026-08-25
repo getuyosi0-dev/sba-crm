@@ -305,8 +305,29 @@ body { padding-bottom: 80px; }
   </div>
 
   <div class="card" id="top10Card" style="display:none;margin-bottom:12px;">
-    <div class="card-title">Top 10 by Priority Score</div>
-    <div id="top10List"></div>
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <span>Top 10 by Priority Score</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score. Columns: Opportunities, Support Needed, Plan By When (from Sales Tracker).</p>
+    <div id="top10List" style="overflow-x:auto;"></div>
+  </div>
+
+  <div class="card" id="executedSalesCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <span>Executed Sales</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="refreshExecutedSalesTable()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">From Sales Tracker columns: Executed Product, UOM, Quantity, Date. Filter by period.</p>
+    <div class="filter-bar" id="execPeriodBar" style="margin-bottom:10px;">
+      <button type="button" class="filter-chip active" data-exec-period="month" onclick="setExecPeriod('month')">This month</button>
+      <button type="button" class="filter-chip" data-exec-period="3m" onclick="setExecPeriod('3m')">3 months</button>
+      <button type="button" class="filter-chip" data-exec-period="6m" onclick="setExecPeriod('6m')">6 months</button>
+      <button type="button" class="filter-chip" data-exec-period="year" onclick="setExecPeriod('year')">This year</button>
+      <button type="button" class="filter-chip" data-exec-period="all" onclick="setExecPeriod('all')">All</button>
+    </div>
+    <div id="executedPeriodMeta" style="font-size:12px;color:var(--text-light);margin-bottom:8px;"></div>
+    <div id="executedSalesList" style="overflow-x:auto;"></div>
   </div>
 
   <div class="card" id="otherMetricsCard" style="display:none;margin-bottom:12px;">
@@ -532,7 +553,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-date-dd-mmm-yyyy';
+const SBA_APP_VERSION = 'sba25-2026-08-25-top10-exec-tables';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1307,6 +1328,240 @@ function escapeHtml(str) {
 }
 
 // ==================== DASHBOARD ====================
+let execPeriodMode = 'month'; // month | 3m | 6m | year | all
+
+function companyPriorityScore(c) {
+  let score = parseFloat(c.priority_score);
+  if (!isNaN(score)) return score;
+  const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
+  const potMap = { High: 30, Medium: 10, Low: 3 };
+  const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
+  const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
+  const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
+  const val = parseFloat(c.est_value) || 0;
+  const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
+  return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
+}
+
+function computeTop10ByPriority(companies) {
+  const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim())
+      && String(c.name).indexOf('——') !== 0
+      && !isClosedStage(c.sales_stage);
+  });
+  return list.map(function(c) {
+    return { c: c, score: companyPriorityScore(c) };
+  }).sort(function(a, b) { return b.score - a.score; }).slice(0, 10);
+}
+
+function renderTop10Table(companies) {
+  const el = document.getElementById('top10List');
+  if (!el) return;
+  const scored = computeTop10ByPriority(companies);
+  if (!scored.length) {
+    el.innerHTML = '<p class="empty-state" style="margin:0;">No open deals yet. Add companies or clear Won/Lost filters.</p>';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:640px;">';
+  html += '<thead><tr style="background:var(--primary);color:#fff;text-align:left;">' +
+    '<th style="padding:8px 6px;">#</th>' +
+    '<th style="padding:8px 6px;">Company</th>' +
+    '<th style="padding:8px 6px;">Score</th>' +
+    '<th style="padding:8px 6px;">Priority</th>' +
+    '<th style="padding:8px 6px;">Opportunities</th>' +
+    '<th style="padding:8px 6px;">Support Needed</th>' +
+    '<th style="padding:8px 6px;">By Whom?</th>' +
+    '<th style="padding:8px 6px;">By When?</th>' +
+    '</tr></thead><tbody>';
+  scored.forEach(function(item, i) {
+    const c = item.c;
+    const p = companyPriorityLabel(c) || (item.score >= 65 ? 'Critical' : item.score >= 45 ? 'High' : item.score >= 25 ? 'Medium' : 'Low');
+    const opp = c.opportunities || '';
+    const support = c.support_needed || '';
+    const whom = c.sales_owner || '';
+    let when = c.plan_by_when || c.next_follow_up_date || '';
+    if (when !== '' && when != null) {
+      if (typeof formatDateDDMMMYYYY === 'function') {
+        const disp = formatDateDDMMMYYYY(when);
+        if (disp) when = disp;
+      }
+    } else when = '';
+    const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+    const bg = i % 2 ? 'background:#f7fafc;' : '';
+    html += '<tr style="border-bottom:1px solid var(--border);' + bg + 'cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
+      '<td style="padding:8px 6px;font-weight:700;">' + (i + 1) + '</td>' +
+      '<td style="padding:8px 6px;font-weight:600;max-width:140px;">' + escapeHtml(c.name || '') +
+      '<div style="font-size:10px;color:var(--text-light);font-weight:400;">' + escapeHtml(c.sales_stage || '') + '</div></td>' +
+      '<td style="padding:8px 6px;font-weight:700;">' + item.score + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(p) + '</td>' +
+      '<td style="padding:8px 6px;max-width:120px;">' + escapeHtml(String(opp)) + '</td>' +
+      '<td style="padding:8px 6px;max-width:120px;">' + escapeHtml(String(support)) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(String(whom)) + '</td>' +
+      '<td style="padding:8px 6px;white-space:nowrap;">' + escapeHtml(String(when)) + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function refreshTop10Table() {
+  if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
+  renderTop10Table(getCompaniesFromWorkbook());
+  showToast('Top 10 refreshed', 'success');
+}
+
+function getExecPeriodRange(mode, refDate) {
+  const ref = refDate || new Date();
+  const y = ref.getFullYear();
+  const m = ref.getMonth();
+  const startOfDay = function(dt) {
+    return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0, 0);
+  };
+  const endOfDay = function(dt) {
+    return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 23, 59, 59, 999);
+  };
+  mode = mode || execPeriodMode || 'month';
+  if (mode === 'all') return { start: null, end: null, label: 'All time' };
+  if (mode === 'month') {
+    const start = new Date(y, m, 1);
+    const end = endOfDay(new Date(y, m + 1, 0));
+    return { start: start, end: end, label: start.toLocaleString(undefined, { month: 'long', year: 'numeric' }) };
+  }
+  if (mode === 'year') {
+    const start = new Date(y, 0, 1);
+    const end = endOfDay(new Date(y, 11, 31));
+    return { start: start, end: end, label: String(y) };
+  }
+  if (mode === '3m' || mode === '6m') {
+    const months = mode === '3m' ? 3 : 6;
+    const end = endOfDay(ref);
+    const start = startOfDay(new Date(y, m - (months - 1), 1));
+    return { start: start, end: end, label: 'Last ' + months + ' months (from ' + start.toLocaleDateString() + ')' };
+  }
+  return getExecPeriodRange('month', ref);
+}
+
+function setExecPeriod(mode) {
+  execPeriodMode = mode || 'month';
+  document.querySelectorAll('#execPeriodBar .filter-chip').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-exec-period') === execPeriodMode);
+  });
+  renderExecutedSalesTable();
+}
+
+function computeExecutedSales(companies, mode) {
+  const range = getExecPeriodRange(mode || execPeriodMode);
+  const rows = [];
+  (companies || getCompaniesFromWorkbook()).forEach(function(c) {
+    if (!c.name || !String(c.name).trim()) return;
+    if (/^(legend|notes?)$/i.test(String(c.name).trim())) return;
+    const product = c.executed_product != null ? String(c.executed_product).trim() : '';
+    const qtyRaw = c.executed_quantity;
+    const hasQty = qtyRaw !== '' && qtyRaw != null && !isNaN(parseFloat(qtyRaw));
+    if (!product && !hasQty) return;
+    const d = parseCompanyDate(c.executed_date) || (typeof excelSerialToDate === 'function' ? excelSerialToDate(c.executed_date) : null);
+    if (range.start && range.end) {
+      if (!d) return; // period filter requires a date
+      const t = d.getTime();
+      if (t < range.start.getTime() || t > range.end.getTime()) return;
+    }
+    rows.push({
+      company: c.name,
+      product: product || '—',
+      uom: (c.executed_uom != null && String(c.executed_uom).trim()) ? String(c.executed_uom).trim() : '—',
+      quantity: hasQty ? parseFloat(qtyRaw) : '—',
+      date: c.executed_date,
+      dateDisp: d && typeof formatDateDDMMMYYYY === 'function' ? formatDateDDMMMYYYY(c.executed_date) : (c.executed_date || '—'),
+      owner: c.sales_owner || '',
+      _rowIndex: c._rowIndex,
+      _sheetName: c._sheetName
+    });
+  });
+  rows.sort(function(a, b) {
+    const da = parseCompanyDate(a.date);
+    const db = parseCompanyDate(b.date);
+    if (da && db) return db.getTime() - da.getTime();
+    if (da) return -1;
+    if (db) return 1;
+    return String(a.company).localeCompare(String(b.company));
+  });
+  return { rows: rows, range: range };
+}
+
+function renderExecutedSalesTable(companies) {
+  const el = document.getElementById('executedSalesList');
+  const meta = document.getElementById('executedPeriodMeta');
+  if (!el) return;
+  const pack = computeExecutedSales(companies, execPeriodMode);
+  if (meta) {
+    meta.textContent = pack.range.label + ' · ' + pack.rows.length + ' line(s)' +
+      (pack.rows.length === 0 ? ' — fill Executed Product / Quantity / Date on Sales Tracker' : '');
+  }
+  if (!pack.rows.length) {
+    el.innerHTML = '<p class="empty-state" style="margin:0;">No executed sales in this period. Add Product, UOM, Quantity and Date on a company, then Refresh.</p>';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:520px;">';
+  html += '<thead><tr style="background:var(--primary);color:#fff;text-align:left;">' +
+    '<th style="padding:8px 6px;">No.</th>' +
+    '<th style="padding:8px 6px;">Company</th>' +
+    '<th style="padding:8px 6px;">Product</th>' +
+    '<th style="padding:8px 6px;">UOM</th>' +
+    '<th style="padding:8px 6px;">Qty</th>' +
+    '<th style="padding:8px 6px;">Date</th>' +
+    '</tr></thead><tbody>';
+  pack.rows.forEach(function(r, i) {
+    const sheet = String(r._sheetName || '').replace(/'/g, "\\'");
+    const bg = i % 2 ? 'background:#f7fafc;' : '';
+    const click = (r._rowIndex != null && r._rowIndex >= 0)
+      ? ' onclick="editCompany(' + r._rowIndex + ',\'' + sheet + '\')" style="cursor:pointer;' + bg + '"'
+      : ' style="' + bg + '"';
+    html += '<tr' + click + ' border-bottom:1px solid var(--border);">' +
+      '<td style="padding:8px 6px;">' + (i + 1) + '</td>' +
+      '<td style="padding:8px 6px;font-weight:600;">' + escapeHtml(r.company) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(r.product) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(r.uom) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(String(r.quantity)) + '</td>' +
+      '<td style="padding:8px 6px;white-space:nowrap;">' + escapeHtml(String(r.dateDisp)) + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table>';
+  // Fix malformed style on tr - rewrite cleaner
+  html = '<table style="width:100%;border-collapse:collapse;font-size:12px;min-width:520px;">';
+  html += '<thead><tr style="background:var(--primary);color:#fff;text-align:left;">' +
+    '<th style="padding:8px 6px;">No.</th>' +
+    '<th style="padding:8px 6px;">Company</th>' +
+    '<th style="padding:8px 6px;">Product</th>' +
+    '<th style="padding:8px 6px;">UOM</th>' +
+    '<th style="padding:8px 6px;">Qty</th>' +
+    '<th style="padding:8px 6px;">Date</th>' +
+    '</tr></thead><tbody>';
+  pack.rows.forEach(function(r, i) {
+    const sheet = String(r._sheetName || '').replace(/'/g, "\\'");
+    const bg = i % 2 ? 'background:#f7fafc;' : 'background:#fff;';
+    const onclick = (r._rowIndex != null && r._rowIndex >= 0)
+      ? ' onclick="editCompany(' + r._rowIndex + ',\'' + sheet + '\')"'
+      : '';
+    html += '<tr' + onclick + ' style="border-bottom:1px solid var(--border);' + bg + 'cursor:pointer;">' +
+      '<td style="padding:8px 6px;">' + (i + 1) + '</td>' +
+      '<td style="padding:8px 6px;font-weight:600;">' + escapeHtml(r.company) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(r.product) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(r.uom) + '</td>' +
+      '<td style="padding:8px 6px;">' + escapeHtml(String(r.quantity)) + '</td>' +
+      '<td style="padding:8px 6px;white-space:nowrap;">' + escapeHtml(String(r.dateDisp)) + '</td>' +
+      '</tr>';
+  });
+  html += '</tbody></table>';
+  el.innerHTML = html;
+}
+
+function refreshExecutedSalesTable() {
+  if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
+  renderExecutedSalesTable(getCompaniesFromWorkbook());
+  showToast('Executed sales refreshed', 'success');
+}
+
 function companyTempBucket(c) {
   // Hot / Warm / Cold for UI badges (not Relationship Level text)
   const s = String(c.opp_status || '').toLowerCase();
@@ -1527,36 +1782,11 @@ function renderDashboard() {
   }
   if (el('priorityCard')) el('priorityCard').style.display = '';
 
-  // Top 10
-  const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
-  const potMap = { High: 30, Medium: 10, Low: 3 };
-  const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
-  const scored = companies.map(c => {
-    let score = parseFloat(c.priority_score);
-    if (isNaN(score)) {
-      const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
-      const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
-      const val = parseFloat(c.est_value) || 0;
-      const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
-      score = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
-    }
-    return { c: c, score: score };
-  }).sort(function(a, b) { return b.score - a.score; }).slice(0, 10);
-
-  if (el('top10List')) {
-    el('top10List').innerHTML = scored.map(function(item, i) {
-      const c = item.c;
-      const p = companyPriorityLabel(c) || (item.score >= 65 ? 'Critical' : item.score >= 45 ? 'High' : item.score >= 25 ? 'Medium' : 'Low');
-      const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
-      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
-        '<div style="width:22px;height:22px;border-radius:50%;background:var(--primary);color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;">' + (i + 1) + '</div>' +
-        '<div style="flex:1;min-width:0;"><div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHtml(c.name || '') + '</div>' +
-        '<div style="font-size:11px;color:var(--text-light);">' + escapeHtml(c.sales_stage || '') + '</div></div>' +
-        '<div style="text-align:right;"><div style="font-weight:700;font-size:14px;">' + item.score + '</div>' +
-        '<div style="font-size:10px;color:var(--text-light);">' + escapeHtml(p) + '</div></div></div>';
-    }).join('') || '<p class="empty-state">No data</p>';
-  }
+  // Top 10 + Executed Sales tables (also used by Refresh buttons)
+  renderTop10Table(companies);
+  renderExecutedSalesTable(companies);
   if (el('top10Card')) el('top10Card').style.display = '';
+  if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
 
   // Other metrics
   const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
