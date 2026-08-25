@@ -354,8 +354,20 @@ body { padding-bottom: 80px; }
       <button type="button" class="filter-chip" data-ppt-period="6m" onclick="setPptPeriod('6m')">6 months</button>
       <button type="button" class="filter-chip" data-ppt-period="year" onclick="setPptPeriod('year')">This year</button>
     </div>
+    <div style="margin:14px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">SWOT analysis</div>
+    <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">
+      Auto-draft from Sales Tracker for the selected period. Edit if needed, or <strong>Copy AI prompt</strong> and paste into Grok/ChatGPT/Claude, then paste the improved text back into the boxes.
+    </p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
+      <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="refreshAutoSwot()">Generate / Refresh SWOT draft</button>
+      <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="copySwotAiPrompt()">Copy AI prompt</button>
+    </div>
+    <div class="form-group"><label class="form-label">S — Strengths</label><textarea class="form-textarea" id="swotStrengths" rows="2" placeholder="Auto-filled…"></textarea></div>
+    <div class="form-group"><label class="form-label">W — Weaknesses</label><textarea class="form-textarea" id="swotWeaknesses" rows="2" placeholder="Auto-filled…"></textarea></div>
+    <div class="form-group"><label class="form-label">O — Opportunities</label><textarea class="form-textarea" id="swotOpportunities" rows="2" placeholder="Auto-filled…"></textarea></div>
+    <div class="form-group"><label class="form-label">T — Threats</label><textarea class="form-textarea" id="swotThreats" rows="2" placeholder="Auto-filled…"></textarea></div>
     <button type="button" class="btn btn-primary" onclick="generatePptReport()">Generate PowerPoint</button>
-    <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">Downloads a filled .pptx. SWOT text is left as placeholders unless you edit those in the template.</p>
+    <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">Downloads a filled .pptx including the SWOT text above.</p>
   </div>
 
   <div class="card" id="otherMetricsCard" style="display:none;margin-bottom:12px;">
@@ -581,7 +593,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-ppt-picker-fix';
+const SBA_APP_VERSION = 'sba25-2026-08-25-swot-ai-prompt';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -1600,6 +1612,215 @@ function setPptPeriod(mode) {
   document.querySelectorAll('#pptPeriodBar .filter-chip').forEach(function(btn) {
     btn.classList.toggle('active', btn.getAttribute('data-ppt-period') === pptPeriodMode);
   });
+  // Keep SWOT draft in sync with period when user switches chips
+  try { refreshAutoSwot(true); } catch (e) {}
+}
+
+/** Rule-based SWOT draft from live Sales Tracker metrics (same facts you used to feed ChatGPT). */
+function computeAutoSwot(companies, periodMode) {
+  const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim())
+      && String(c.name).indexOf('——') !== 0;
+  });
+  const range = getExecPeriodRange(periodMode || pptPeriodMode);
+  const open = list.filter(function(c) { return !isClosedStage(c.sales_stage); });
+  const total = list.length;
+  const industries = {};
+  let goodRel = 0;
+  let stale60 = 0;
+  let critical = 0, high = 0, medium = 0, low = 0;
+  let proposal = 0, lateStage = 0, longDecision = 0;
+  let touches = 0;
+  const suppliers = {};
+  open.forEach(function(c) {
+    const ind = String(c.industry || '').trim();
+    if (ind) industries[ind] = (industries[ind] || 0) + 1;
+    const rel = String(c.relationship_level || '').toLowerCase();
+    if (rel.indexOf('good') !== -1) goodRel++;
+    const days = companyDaysSince(c);
+    if (days != null && days >= 60) stale60++;
+    const p = companyPriorityLabel(c);
+    if (p === 'Critical') critical++;
+    else if (p === 'High') high++;
+    else if (p === 'Medium') medium++;
+    else low++;
+    const st = String(c.sales_stage || '');
+    if (st === 'Proposal Sent') proposal++;
+    if (/Proposal Sent|Negotiation|Waiting Customer Decision|Purchase Order/i.test(st)) lateStage++;
+    if (/Decision time taking long/i.test(st)) longDecision++;
+    const sup = String(c.current_supplier || '').trim();
+    if (sup && !/^unknown/i.test(sup)) {
+      sup.split(/[,;/]+/).forEach(function(s) {
+        const t = s.trim();
+        if (t) suppliers[t] = (suppliers[t] || 0) + 1;
+      });
+    }
+    const d = parseCompanyDate(c.last_contact_date) || excelSerialToDate(c.last_contact_date);
+    if (d && range.start && range.end) {
+      const t = d.getTime();
+      if (t >= range.start.getTime() && t <= range.end.getTime()) touches++;
+    }
+  });
+  const won = list.filter(function(c) { return String(c.sales_stage || '') === 'Won'; }).length;
+  const lost = list.filter(function(c) { return String(c.sales_stage || '') === 'Lost'; }).length;
+  const stalePct = open.length ? Math.round(stale60 / open.length * 100) : 0;
+  const indCount = Object.keys(industries).length;
+  const topInd = Object.keys(industries).sort(function(a, b) { return industries[b] - industries[a]; }).slice(0, 3);
+  const execPack = computeExecutedSales(list, periodMode || pptPeriodMode);
+  const execN = (execPack.rows || []).length;
+  const periodLabel = range.label || 'this period';
+
+  const strengths = [
+    'Pipeline of ' + open.length + ' active accounts across ' + indCount + ' industries' +
+      (topInd.length ? ' (e.g. ' + topInd.join(', ') + ')' : '') + '.',
+    goodRel + ' accounts marked Good Relationship' +
+      (touches ? '; ' + touches + ' customer touches logged in ' + periodLabel : '') + '.',
+    (critical + high) + ' Critical/High-priority opportunities keep focus on the highest-value work.'
+  ].join(' ');
+
+  const weaknessesParts = [];
+  weaknessesParts.push(stalePct + '% of open accounts have not been visited in 60+ days (' + stale60 + ' of ' + open.length + ').');
+  if (won === 0 && lost === 0) {
+    weaknessesParts.push('No Won/Lost closes recorded yet' + (proposal ? ' despite ' + proposal + ' proposals outstanding' : '') + '.');
+  } else {
+    weaknessesParts.push('Period outcomes: ' + won + ' Won / ' + lost + ' Lost.');
+  }
+  if (execN === 0) weaknessesParts.push('No executed sales lines logged for ' + periodLabel + '.');
+  const weaknesses = weaknessesParts.join(' ');
+
+  const coverage = (critical + high);
+  const opportunities = [
+    lateStage + ' late-stage deals (Proposal → PO) provide near-term conversion potential' +
+      (coverage ? ' with ' + coverage + ' Critical/High priorities as coverage' : '') + '.',
+    (execN ? execN + ' executed sale line(s) in ' + periodLabel + ' show delivery traction. ' : '') +
+      'Cross-sell consumables/service into the installed base and expand where Opportunities notes list growth signals.'
+  ].join(' ');
+
+  const competitorHint = Object.keys(suppliers).filter(function(s) {
+    return /domino|videojet|chinese|markem/i.test(s);
+  }).slice(0, 4);
+  const threats = [
+    (competitorHint.length
+      ? 'Competitive pressure from existing suppliers in the book (' + competitorHint.join(', ') + '). '
+      : 'Low-cost and incumbent coding/marking suppliers in the installed base. ') +
+      (longDecision ? longDecision + ' accounts stuck in long decision cycles. ' : '') +
+      'Multi-stakeholder industrial sales cycles remain a risk to forecast timing.'
+  ].join('').trim();
+
+  return {
+    strengths: strengths,
+    weaknesses: weaknesses,
+    opportunities: opportunities,
+    threats: threats,
+    meta: {
+      total: total, open: open.length, goodRel: goodRel, stale60: stale60, stalePct: stalePct,
+      critical: critical, high: high, medium: medium, low: low,
+      proposal: proposal, lateStage: lateStage, longDecision: longDecision,
+      won: won, lost: lost, touches: touches, execN: execN,
+      indCount: indCount, topInd: topInd, periodLabel: periodLabel
+    }
+  };
+}
+
+function getSwotFromForm() {
+  const g = function(id) {
+    const el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+  };
+  return {
+    strengths: g('swotStrengths'),
+    weaknesses: g('swotWeaknesses'),
+    opportunities: g('swotOpportunities'),
+    threats: g('swotThreats')
+  };
+}
+
+function setSwotForm(swot) {
+  const set = function(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.value = v || '';
+  };
+  set('swotStrengths', swot.strengths);
+  set('swotWeaknesses', swot.weaknesses);
+  set('swotOpportunities', swot.opportunities);
+  set('swotThreats', swot.threats);
+}
+
+function refreshAutoSwot(silent) {
+  if (!workbook) {
+    if (!silent) showToast('Open a workbook first', 'warning');
+    return null;
+  }
+  const swot = computeAutoSwot(getCompaniesFromWorkbook(), pptPeriodMode);
+  setSwotForm(swot);
+  if (!silent) showToast('SWOT draft updated for ' + (swot.meta && swot.meta.periodLabel ? swot.meta.periodLabel : 'period'), 'success');
+  return swot;
+}
+
+function buildSwotAiPrompt() {
+  const companies = getCompaniesFromWorkbook().filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim());
+  });
+  const swot = computeAutoSwot(companies, pptPeriodMode);
+  const top10 = computeTop10ByPriority(companies);
+  const exec = computeExecutedSales(companies, pptPeriodMode);
+  const m = swot.meta || {};
+  const lines = [];
+  lines.push('You are helping SBA Ethiopia (Markem-Imaje partner) write a concise monthly sales SWOT for a PowerPoint slide.');
+  lines.push('Write four short paragraphs (2–4 sentences each) labeled Strengths, Weaknesses, Opportunities, Threats.');
+  lines.push('Tone: professional, factual, management-ready. Do not invent companies or numbers not listed below.');
+  lines.push('');
+  lines.push('Period: ' + (m.periodLabel || pptPeriodMode));
+  lines.push('Active open accounts: ' + m.open + ' of ' + m.total + ' total');
+  lines.push('Good Relationship: ' + m.goodRel);
+  lines.push('Touches in period (Last Contact): ' + m.touches);
+  lines.push('Priority mix (open): Critical ' + m.critical + ', High ' + m.high + ', Medium ' + m.medium + ', Low ' + m.low);
+  lines.push('Late-stage deals: ' + m.lateStage + ' | Proposals outstanding: ' + m.proposal);
+  lines.push('Long decision cycles: ' + m.longDecision);
+  lines.push('Stale 60+ days: ' + m.stale60 + ' (' + m.stalePct + '%)');
+  lines.push('Won / Lost: ' + m.won + ' / ' + m.lost);
+  lines.push('Executed sales lines in period: ' + m.execN);
+  lines.push('Industries represented: ' + m.indCount + (m.topInd && m.topInd.length ? ' (top: ' + m.topInd.join(', ') + ')' : ''));
+  lines.push('');
+  lines.push('Top 10 by priority score:');
+  top10.forEach(function(item, i) {
+    const c = item.c;
+    lines.push((i + 1) + '. ' + (c.name || '') + ' | ' + (c.sales_stage || '') + ' | score ' + item.score +
+      (c.opportunities ? ' | opp: ' + String(c.opportunities).slice(0, 80) : ''));
+  });
+  if (exec.rows && exec.rows.length) {
+    lines.push('');
+    lines.push('Executed sales:');
+    exec.rows.slice(0, 8).forEach(function(r, i) {
+      lines.push((i + 1) + '. ' + r.company + ' — ' + r.product + ' / ' + r.uom + ' x ' + r.quantity + ' (' + r.dateDisp + ')');
+    });
+  }
+  lines.push('');
+  lines.push('Current auto-draft (improve wording, keep facts):');
+  lines.push('Strengths: ' + swot.strengths);
+  lines.push('Weaknesses: ' + swot.weaknesses);
+  lines.push('Opportunities: ' + swot.opportunities);
+  lines.push('Threats: ' + swot.threats);
+  lines.push('');
+  lines.push('Return only the four improved paragraphs with clear Strengths/Weaknesses/Opportunities/Threats labels.');
+  return lines.join('\n');
+}
+
+function copySwotAiPrompt() {
+  if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
+  const text = buildSwotAiPrompt();
+  function ok() { showToast('AI prompt copied — paste into Grok, ChatGPT, or Claude', 'success'); }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(ok).catch(function() {
+      window.prompt('Copy this prompt:', text);
+      ok();
+    });
+  } else {
+    window.prompt('Copy this prompt:', text);
+    ok();
+  }
 }
 
 function updatePptTemplateStatus() {
@@ -1782,6 +2003,18 @@ function buildPptPlaceholderMap(periodMode) {
     SWOT_OPPORTUNITIES: '',
     SWOT_THREATS: ''
   };
+
+  // Prefer edited form SWOT; else auto-draft
+  let formSwot = getSwotFromForm();
+  if (!formSwot.strengths && !formSwot.weaknesses && !formSwot.opportunities && !formSwot.threats) {
+    const auto = computeAutoSwot(companies, periodMode || pptPeriodMode);
+    formSwot = auto;
+    setSwotForm(auto);
+  }
+  map.SWOT_STRENGTHS = formSwot.strengths || '';
+  map.SWOT_WEAKNESSES = formSwot.weaknesses || '';
+  map.SWOT_OPPORTUNITIES = formSwot.opportunities || '';
+  map.SWOT_THREATS = formSwot.threats || '';
 
   for (let i = 1; i <= 10; i++) {
     const item = top10[i - 1];
@@ -2124,6 +2357,10 @@ function renderDashboard() {
   if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
   if (el('pptReportCard')) el('pptReportCard').style.display = '';
   updatePptTemplateStatus();
+  try {
+    const sEl = document.getElementById('swotStrengths');
+    if (sEl && !String(sEl.value || '').trim()) refreshAutoSwot(true);
+  } catch (e) {}
 
   // Other metrics
   const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
@@ -2321,18 +2558,10 @@ function renderDashboard() {
     });
   }
 
-  // Score distribution histogram
+  // Score distribution histogram (all companies — uses shared priority score helper)
   const buckets = { '0-24': 0, '25-44': 0, '45-64': 0, '65-100': 0 };
-  scored.forEach(function() {}); // scored is top 10 only — use all companies
-  companies.forEach(c => {
-    let score = parseFloat(c.priority_score);
-    if (isNaN(score)) {
-      const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
-      const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
-      const val = parseFloat(c.est_value) || 0;
-      const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
-      score = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
-    }
+  companies.forEach(function(c) {
+    const score = typeof companyPriorityScore === 'function' ? companyPriorityScore(c) : (parseFloat(c.priority_score) || 0);
     if (score >= 65) buckets['65-100']++;
     else if (score >= 45) buckets['45-64']++;
     else if (score >= 25) buckets['25-44']++;
