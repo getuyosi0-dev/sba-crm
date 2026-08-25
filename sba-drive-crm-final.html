@@ -422,10 +422,12 @@ body { padding-bottom: 80px; }
     <div class="profile-meta"><span id="editCompanyIndustry">Industry</span><span>&bull;</span><span id="editCompanyStatus">Status</span></div>
   </div>
   <div id="editForm"></div>
-  <div style="display:flex;gap:10px;margin-top:16px;">
+  <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:16px;">
     <button class="btn btn-primary" onclick="saveCompanyEdit()">Save Changes</button>
     <button class="btn btn-secondary" onclick="navigate('companies')">Cancel</button>
+    <button class="btn btn-secondary" onclick="deleteCompanyRow()" style="border-color:#c62828;color:#c62828;">Delete company</button>
   </div>
+  <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">Delete clears this row on Sales Tracker (removes it from counts and Top 10). Save to Drive to update the Excel file.</p>
 </div>
 
 <!-- SHEETS VIEW -->
@@ -593,7 +595,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-swot-ai-prompt';
+const SBA_APP_VERSION = 'sba25-2026-08-25-total-delete';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -2255,34 +2257,8 @@ function renderDashboard() {
   const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim()
     && !/^(legend|notes?)$/i.test(String(c.name).trim())
     && String(c.name).indexOf('——') !== 0);
-  // Prefer Excel Dashboard cached Total Customers when present; else count Sales Tracker
-  let total = companies.length;
-  try {
-    const dashName = (workbook.SheetNames || []).find(function(n) { return /dashboard/i.test(n); });
-    if (dashName) {
-      const drows = XLSX.utils.sheet_to_json(workbook.Sheets[dashName], { header: 1, defval: '' });
-      // Find "Total Customers" label and value in next cell / row below
-      outer:
-      for (let r = 0; r < Math.min(drows.length, 30); r++) {
-        for (let c = 0; c < (drows[r] || []).length; c++) {
-          if (String(drows[r][c]).toLowerCase().indexOf('total customer') !== -1) {
-            // value often on same row next cols or row below
-            const candidates = [
-              drows[r][c+1], drows[r][c+2],
-              (drows[r+1] && drows[r+1][c]),
-              (drows[r+1] && drows[r+1][c+1]),
-              (drows[r+1] && drows[r+1][0]),
-              (drows[r+1] && drows[r+1][1])
-            ];
-            for (let k = 0; k < candidates.length; k++) {
-              const n = parseFloat(candidates[k]);
-              if (isFinite(n) && n > 0 && n < 100000) { total = Math.round(n); break outer; }
-            }
-          }
-        }
-      }
-    }
-  } catch (e) { console.warn('[SBA] Dashboard total read failed', e); }
+  // Always count named rows on Sales Tracker (Dashboard sheet formulas are often stale in the file)
+  const total = companies.length;
   const active = companies.filter(c => !isClosedStage(c.sales_stage)).length;
   const criticalHigh = companies.filter(c => {
     const p = companyPriorityLabel(c).toLowerCase();
@@ -2905,6 +2881,90 @@ function saveCompanyEdit() {
   });
 
   showToast('Company updated — saving to Drive in the background…', 'success');
+  navigate('companies');
+  renderCompanies();
+  renderDashboard();
+}
+
+/** Clear a wrong/test company row (e.g. "Yosef") on Sales Tracker and save to Drive. */
+function deleteCompanyRow() {
+  if (!workbook || editingCompanyIndex < 0 || !editingSheetName) {
+    showToast('Open a company first', 'warning');
+    return;
+  }
+  const sheet = workbook.Sheets[editingSheetName];
+  const { headers, data } = getSheetAoaInfo(sheet);
+  const row = data[editingCompanyIndex];
+  if (!row) { showToast('Row not found', 'error'); return; }
+  const nameBefore = String(row[0] || row[headers.findIndex(function(h) { return normalizeHeader(h) === 'company' || normalizeHeader(h) === 'name'; })] || '').trim();
+  if (!confirm('Delete company "' + (document.getElementById('editCompanyName').textContent || nameBefore || 'this row') + '" from Sales Tracker?\n\nThis clears the company name and key fields, then saves to Drive.')) return;
+
+  const headerMap = {};
+  headers.forEach(function(h, i) { if (h) headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers);
+  const clearKeys = [
+    'name', 'company', 'company_name', 'industry', 'contact_person', 'first_contact_date', 'last_contact_date',
+    'total_contacted', 'current_supplier', 'sales_potential', 'sales_stage', 'notes', 'opportunity_summary',
+    'est_value', 'next_follow_up_date', 'relationship_level', 'sales_owner', 'opportunities', 'support_needed',
+    'plan_by_when', 'executed_product', 'executed_uom', 'executed_quantity', 'executed_date'
+  ];
+  const editValues = {};
+  clearKeys.forEach(function(f) {
+    const actual = canonMap[f] || (headerMap[f] !== undefined ? f : null);
+    if (actual != null && headerMap[actual] !== undefined) {
+      row[headerMap[actual]] = '';
+      editValues[actual] = '';
+      editValues[f] = '';
+    }
+  });
+  // Also blank any leftover name aliases on the AOA row
+  ['name', 'company', 'company_name'].forEach(function(f) {
+    if (headerMap[f] !== undefined) row[headerMap[f]] = '';
+  });
+
+  try {
+    const ws = workbook.Sheets[editingSheetName];
+    Object.keys(editValues).forEach(function(k) {
+      const col = headerMap[k] !== undefined ? headerMap[k] : (canonMap[k] != null ? headerMap[canonMap[k]] : undefined);
+      if (col === undefined) return;
+      const addr = (typeof colLetters === 'function' ? colLetters(col) : 'A') + (editingCompanyIndex + 1);
+      try { XLSX.utils.sheet_add_aoa(ws, [['']], { origin: addr }); } catch (e) {}
+    });
+  } catch (e) { console.warn('[SBA] SheetJS clear failed', e); }
+
+  const excelRow = editingCompanyIndex + 1;
+  // Pending edit: write empty strings so Drive file loses the company
+  const emptyWrite = {};
+  Object.keys(editValues).forEach(function(k) { emptyWrite[k] = ''; });
+  // Force name keys so applyEditRow clears the company cell
+  emptyWrite.name = '';
+  emptyWrite.company = '';
+  emptyWrite.company_name = '';
+
+  pendingEdits = pendingEdits.filter(function(e) {
+    return !(e.sheetName === editingSheetName && (e.rowIndex === editingCompanyIndex || e.excelRow === excelRow));
+  });
+  pendingEdits.push({
+    type: 'edit',
+    sheetName: editingSheetName,
+    rowIndex: editingCompanyIndex,
+    excelRow: excelRow,
+    values: emptyWrite,
+    _delete: true
+  });
+
+  editingIsPendingAdd = false;
+  markDirtyAndScheduleSave();
+  logActivity({
+    type: 'delete',
+    name: nameBefore || 'Deleted',
+    industry: '',
+    temp: 'cold',
+    sheetName: editingSheetName,
+    rowIndex: editingCompanyIndex
+  });
+  showToast('Company removed — saving to Drive…', 'success');
+  editingCompanyIndex = -1;
   navigate('companies');
   renderCompanies();
   renderDashboard();
