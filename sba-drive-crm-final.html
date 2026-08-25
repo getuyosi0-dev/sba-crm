@@ -468,7 +468,7 @@ body { padding-bottom: 80px; }
           <option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>
         </select>
       </div>
-      <div class="form-group"><label class="form-label">Opportunity Summary / Notes</label><textarea class="form-textarea" id="acNotes"></textarea></div>
+      <div class="form-group"><label class="form-label">Opportunity Summary / Notes</label><textarea class="form-textarea" id="acNotes" placeholder="General CRM notes / opportunity summary (not the Top-10 column)"></textarea></div>
       <div class="form-group"><label class="form-label">Est. Business Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
       <div class="form-group"><label class="form-label">Next Follow-up Date</label><input type="date" class="form-input" id="acFollowUp"></div>
       <div class="form-group">
@@ -478,6 +478,19 @@ body { padding-bottom: 80px; }
         </select>
       </div>
       <div class="form-group"><label class="form-label">Sales Owner</label><input type="text" class="form-input" id="acOwner" value="Yosef Getu"></div>
+
+      <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:0.4px;">Top-10 plan (optional)</div>
+      <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;"><strong>Opportunities</strong> here is the Top-10 plan column — separate from Opportunity Summary / Notes above.</p>
+      <div class="form-group"><label class="form-label">Opportunities (Top-10)</label><input type="text" class="form-input" id="acOpportunities" placeholder="Short plan line for Top-10 slide"></div>
+      <div class="form-group"><label class="form-label">Support Needed</label><input type="text" class="form-input" id="acSupport" placeholder="Resources / support needed"></div>
+      <div class="form-group"><label class="form-label">Plan By When</label><input type="date" class="form-input" id="acPlanWhen"></div>
+
+      <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:0.4px;">Executed sale (optional — when Won)</div>
+      <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">Add matching columns on Sales Tracker in Excel first (see headers below). One product line per company.</p>
+      <div class="form-group"><label class="form-label">Executed Product</label><input type="text" class="form-input" id="acExecProduct" placeholder="e.g. Board Kit"></div>
+      <div class="form-group"><label class="form-label">Executed UOM</label><input type="text" class="form-input" id="acExecUom" placeholder="e.g. pcs, Bottles, Items"></div>
+      <div class="form-group"><label class="form-label">Executed Quantity</label><input type="number" class="form-input" id="acExecQty" min="0" placeholder="0"></div>
+      <div class="form-group"><label class="form-label">Executed Date</label><input type="date" class="form-input" id="acExecDate"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modalAddCompany')">Cancel</button>
@@ -519,7 +532,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-21-weekly-styled-sheets';
+const SBA_APP_VERSION = 'sba25-2026-08-25-opportunities-separate';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -560,11 +573,21 @@ const FIELD_ALIASES = {
   application_type: ['application_type', 'app_type', 'application', 'tech_application'],
   number_of_technologies: ['number_of_technologies', 'num_technologies', 'technologies', 'tech_count', 'no_of_technologies'],
   number_of_brands: ['number_of_brands', 'num_brands', 'brands', 'brand_count', 'no_of_brands'],
-  number_of_machines: ['number_of_machines', 'num_machines', 'machines', 'machine_count', 'no_of_machines']
+  number_of_machines: ['number_of_machines', 'num_machines', 'machines', 'machine_count', 'no_of_machines'],
+  // Executed sales (single line per company on Sales Tracker — feeds PPT Executed Sales table)
+  executed_product: ['executed_product', 'exec_product', 'product_sold', 'product', 'executed_sales_product'],
+  executed_uom: ['executed_uom', 'exec_uom', 'uom', 'unit', 'executed_sales_uom'],
+  executed_quantity: ['executed_quantity', 'exec_qty', 'executed_qty', 'quantity', 'qty', 'executed_sales_quantity'],
+  executed_date: ['executed_date', 'exec_date', 'sale_date', 'order_date', 'executed_sales_date'],
+  // Top-10 plan fields (filter by priority → fill PPT Top-10 table)
+  // Opportunities = Top-10 plan column — NOT the same as Opportunity Summary / Notes
+  opportunities: ['opportunities', 'top_opportunity', 'plan_opportunity', 'opp_plan', 'top10_opportunity'],
+  support_needed: ['support_needed', 'resources_support_needed', 'resources_needed', 'support', 'resources'],
+  plan_by_when: ['plan_by_when', 'by_when', 'plan_when', 'target_date', 'deadline']
 };
 
 // Always store these as Excel text (inlineStr), never as numbers — protects phone numbers, names, etc.
-const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'current_supplier', 'next_action', 'sales_owner', 'application_type']);
+const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'opportunities', 'current_supplier', 'next_action', 'sales_owner', 'application_type', 'executed_product', 'executed_uom', 'support_needed']);
 
 // These columns are Excel formulas — never overwrite with static values from the form
 const FORMULA_ONLY_FIELDS = new Set([
@@ -1906,6 +1929,13 @@ function editCompany(rowIndex, sheetName) {
     {key:'next_follow_up_date',label:'Next Follow-up Date',type:'date'},
     {key:'relationship_level',label:'Relationship Level',type:'select',options:['Good Relationship','Warm','Cold']},
     {key:'sales_owner',label:'Sales Owner',type:'text'},
+    {key:'opportunities',label:'Opportunities (Top-10 plan)',type:'text'},
+    {key:'support_needed',label:'Support Needed (Top-10)',type:'text'},
+    {key:'plan_by_when',label:'Plan By When (Top-10)',type:'date'},
+    {key:'executed_product',label:'Executed Product',type:'text'},
+    {key:'executed_uom',label:'Executed UOM',type:'text'},
+    {key:'executed_quantity',label:'Executed Quantity',type:'number'},
+    {key:'executed_date',label:'Executed Date',type:'date'},
   ];
 
   const canonMap = buildCanonicalToHeaderKey(headers);
@@ -1996,13 +2026,22 @@ function saveCompanyEdit() {
 
   const row = data[editingCompanyIndex];
   // Editable inputs only — never push formula-driven fields (priority, probability, next_action, rank)
-  const fields = ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner'];
+  const fields = ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner','opportunities','support_needed','plan_by_when','executed_product','executed_uom','executed_quantity','executed_date'];
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
     if (!el) return;
     const actualKey = canonMap[f] || (headerMap[f] !== undefined ? f : null);
     if (actualKey != null && headerMap[actualKey] !== undefined) {
-      row[headerMap[actualKey]] = el.value;
+      let v = el.value;
+      if (f === 'plan_by_when' || f === 'executed_date' || f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
+        const serial = toExcelDateSerial(v);
+        if (serial != null) v = serial;
+      }
+      if (f === 'executed_quantity' || f === 'est_value' || f === 'total_contacted') {
+        const n = parseFloat(String(v).replace(/,/g, ''));
+        if (isFinite(n) && String(v).trim() !== '') v = n;
+      }
+      row[headerMap[actualKey]] = v;
     }
   });
   // Notes also write to Opportunity Summary when that column exists
@@ -2125,6 +2164,16 @@ function saveCompany() {
   setVal('next_follow_up_date', toExcelDateSerial(g('acFollowUp')) ?? g('acFollowUp'));
   setVal('relationship_level', g('acRelationship') || 'Warm');
   setVal('sales_owner', g('acOwner') || 'Yosef Getu');
+  // Top-10 plan fields (Opportunities ≠ Opportunity Summary / Notes)
+  setVal('opportunities', g('acOpportunities'));
+  setVal('support_needed', g('acSupport'));
+  setVal('plan_by_when', toExcelDateSerial(g('acPlanWhen')) ?? g('acPlanWhen'));
+  // Executed sale (one product line per company on Sales Tracker)
+  setVal('executed_product', g('acExecProduct'));
+  setVal('executed_uom', g('acExecUom'));
+  const execQty = g('acExecQty');
+  if (execQty !== '') setVal('executed_quantity', parseFloat(execQty) || 0);
+  setVal('executed_date', toExcelDateSerial(g('acExecDate')) ?? g('acExecDate'));
 
   // Robust duplicate guard
   const nameKey = canonMap['name'] || 'company' || 'name';
@@ -2210,7 +2259,7 @@ function saveCompany() {
   });
 
   closeModal('modalAddCompany');
-  ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp'].forEach(id => {
+  ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp','acOpportunities','acSupport','acPlanWhen','acExecProduct','acExecUom','acExecQty','acExecDate'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
 
