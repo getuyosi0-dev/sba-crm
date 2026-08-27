@@ -222,6 +222,8 @@ body { padding-bottom: 80px; }
 <!-- Mobile Header -->
 <header class="app-header mobile-only">
   <h1 id="pageTitle">Dashboard</h1>
+  <span id="workbookModeBadge" style="display:none;font-size:11px;font-weight:600;color:var(--primary);background:#e8f1fa;padding:4px 10px;border-radius:12px;margin-left:8px;vertical-align:middle;"></span>
+  <button type="button" class="edit-btn" style="margin-left:6px;" onclick="openModal('modalWorkbookMode')" title="Switch workbook mode">Mode</button>
   <div class="drive-status disconnected" id="mobileDriveStatus">
     <span class="drive-dot"></span><span id="mobileDriveStatusText">Disconnected</span>
   </div>
@@ -563,6 +565,26 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
+<!-- Workbook mode chooser (user selects — no auto-guess by file name) -->
+<div class="modal-overlay" id="modalWorkbookMode">
+  <div class="modal-sheet">
+    <div class="modal-header"><div class="modal-title">Choose workbook type</div></div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text-light);margin:0 0 14px;line-height:1.45;">
+        This file can be used in different ways. Pick the type that matches the Excel you opened so the app uses the correct sheet and fields.
+      </p>
+      <button type="button" class="btn btn-primary" style="margin-bottom:10px;" onclick="confirmWorkbookMode('tracker')">
+        Sales Tracker CRM
+      </button>
+      <p style="font-size:11px;color:var(--text-light);margin:0 0 14px;">Customer Sales Tracker — priority score, weekly report, executed sales, Rank / Top 10.</p>
+      <button type="button" class="btn btn-secondary" onclick="confirmWorkbookMode('master')">
+        Master Data CRM
+      </button>
+      <p style="font-size:11px;color:var(--text-light);margin:0;">SBA Workbook — Master Data sheet, Hot/Warm/Cold, Closed Won/Lost. Dashboard formulas stay in Excel.</p>
+    </div>
+  </div>
+</div>
+
 <script>
 // ==================== CONFIG - YOUR CREDENTIALS ====================
 // WARNING: Keep this file private. Do not share it publicly.
@@ -596,8 +618,91 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-drive-shared-picker';
+const SBA_APP_VERSION = 'sba25-2026-08-27-master-mode';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
+
+/** User-selected workbook mode: 'tracker' | 'master' | null */
+let workbookMode = null;
+
+function isMasterMode() { return workbookMode === 'master'; }
+function isTrackerMode() { return workbookMode === 'tracker' || workbookMode == null; }
+
+function modeStorageKey() {
+  return currentFile && currentFile.id ? ('sba_workbook_mode_' + currentFile.id) : null;
+}
+function loadSavedWorkbookMode() {
+  try {
+    const k = modeStorageKey();
+    if (!k) return null;
+    const m = localStorage.getItem(k);
+    if (m === 'master' || m === 'tracker') return m;
+  } catch (e) {}
+  return null;
+}
+function saveWorkbookMode(mode) {
+  workbookMode = mode;
+  try {
+    const k = modeStorageKey();
+    if (k) localStorage.setItem(k, mode);
+  } catch (e) {}
+}
+function isFormulaOnlyField(key) {
+  const k = String(key || '').toLowerCase();
+  if (isMasterMode()) {
+    // Master Data: Exp Revenue + auto counts are formulas; Priority/Probability are inputs
+    return k === 'exp_revenue' || k === 'number_of_brands' || k === 'number_of_machines' ||
+      k === 'number_of_technologies' || k === 'days_since_last_visit';
+  }
+  return typeof FORMULA_ONLY_FIELDS !== 'undefined' && FORMULA_ONLY_FIELDS.has(k);
+}
+
+function confirmWorkbookMode(mode, silent) {
+  if (mode !== 'master' && mode !== 'tracker') return;
+  saveWorkbookMode(mode);
+  try { closeModal('modalWorkbookMode'); } catch (e) {}
+  applyModeUI();
+  if (!silent) {
+    showToast(mode === 'master' ? 'Master Data mode' : 'Sales Tracker mode', 'success');
+  }
+  try {
+    renderDashboard();
+    renderCompanies();
+  } catch (e) { console.warn(e); }
+  if (isTrackerMode()) {
+    setTimeout(function() { try { maybeAutoWeeklyReport(); } catch (e) {} }, 500);
+  }
+}
+
+/** Show/hide Tracker-only vs Master-only UI */
+function applyModeUI() {
+  const master = isMasterMode();
+  const hideIds = master
+    ? ['executedSalesCard', 'pptReportCard', 'top10Card']
+    : [];
+  hideIds.forEach(function(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+  });
+  // Weekly nav: hide in master mode
+  document.querySelectorAll('.nav-link, .nav-item, .qa-btn').forEach(function(el) {
+    const oc = el.getAttribute('onclick') || '';
+    if (oc.indexOf("weekly") !== -1) {
+      el.style.display = master ? 'none' : '';
+    }
+  });
+  const modeBadge = document.getElementById('workbookModeBadge');
+  if (modeBadge) {
+    modeBadge.textContent = master ? 'Mode: Master Data' : (workbookMode === 'tracker' ? 'Mode: Sales Tracker' : '');
+    modeBadge.style.display = workbookMode ? 'inline-block' : 'none';
+  }
+  // Add-company help text
+  const addHint = document.querySelector('#modalAddCompany .modal-body > p');
+  if (addHint) {
+    addHint.textContent = master
+      ? 'Master Data: fill company inputs. Exp. Revenue and machine/brand counts stay as Excel formulas.'
+      : 'Only enter inputs Excel needs. Probability, Priority Score, Rank, Days Since Visit, Next Action and Follow-up Status are calculated automatically.';
+  }
+}
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
 let editingSheetName = '';
@@ -608,6 +713,7 @@ let editingIsPendingAdd = false;   // true when the company being edited was add
 const FIELD_ALIASES = {
   name: ['name', 'company', 'company_name', 'companyname', 'account', 'account_name', 'customer', 'customer_name', 'client', 'client_name'],
   brand_name: ['brand_name', 'brand', 'brandname', 'product_brand'],
+  model: ['model', 'machine_model', 'printer_model'],
   industry: ['industry', 'sector', 'industry_type', 'business_type'],
   location: ['location', 'city', 'address', 'region', 'site', 'place'],
   // Relationship Level is this workbook's "temperature"; also accept older opp_status columns
@@ -628,7 +734,7 @@ const FIELD_ALIASES = {
   next_follow_up_date: ['next_follow_up_date', 'next_followup_date', 'follow_up_date', 'next_follow_up'],
   sales_owner: ['sales_owner', 'owner', 'rep'],
   first_contact_date: ['first_contact_date', 'first_contact', 'date_first_contact'],
-  last_contact_date: ['last_contact_date', 'last_contact', 'date_last_contact', 'last_visit_date'],
+  last_contact_date: ['last_contact_date', 'last_contact', 'date_last_contact', 'last_visit_date', 'last_visit', 'last_visit_put_the_date_by_number_in_month_day_year_12_03_2026'],
   total_contacted: ['total_contacted', 'total_contact', 'visit_count', 'times_contacted', 'no_of_visits'],
   days_since_last_visit: ['days_since_last_visit', 'days_since_visit', 'days_since_last_contact'],
   follow_up_status: ['follow_up_status', 'followup_status'],
@@ -922,10 +1028,14 @@ function loadFileFromDrive(fileId) {
       showToast('File loaded: ' + currentFile.name, 'success');
       updateFileUI();
       updateDirtyIndicator();
-      renderDashboard();
-      renderCompanies();
-      // Thursday 18:00+ or Friday → auto weekly report + save
-      setTimeout(function() { maybeAutoWeeklyReport(); }, 800);
+      // Require explicit mode (remembered per Drive file id)
+      const savedMode = loadSavedWorkbookMode();
+      if (savedMode === 'master' || savedMode === 'tracker') {
+        confirmWorkbookMode(savedMode, true);
+      } else {
+        workbookMode = null;
+        openModal('modalWorkbookMode');
+      }
     })
     .catch(err => {
       console.error('Load error:', err);
@@ -1201,6 +1311,28 @@ function findTargetSheetName() {
   const sheetNames = workbook.SheetNames;
   // Strip leading emoji / symbols so "📋 Master Data" still matches Master
   const clean = n => String(n).replace(/^[^\w]+/u, '').trim();
+  // Explicit user mode — do not guess the other workbook type
+  if (isMasterMode()) {
+    const masterPrefs = [
+      n => /master/i.test(clean(n)) && /data/i.test(n),
+      n => /master/i.test(clean(n)),
+      n => /^\s*📋/.test(n) && /master|data/i.test(n)
+    ];
+    for (const pred of masterPrefs) {
+      const hit = sheetNames.find(pred);
+      if (hit) return hit;
+    }
+  } else if (workbookMode === 'tracker') {
+    const trackerPrefs = [
+      n => /sales\s*tracker/i.test(n),
+      n => /tracker/i.test(n) && !/next\s*week/i.test(n),
+      n => /customer/i.test(n) && /tracker|sales/i.test(n)
+    ];
+    for (const pred of trackerPrefs) {
+      const hit = sheetNames.find(pred);
+      if (hit) return hit;
+    }
+  }
   const preferences = [
     n => /sales\s*tracker/i.test(n),
     n => /master/i.test(clean(n)) && /data/i.test(n),
@@ -2301,8 +2433,11 @@ function companyDaysSince(c) {
   return Math.round((t0 - Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate())) / 86400000);
 }
 function isClosedStage(stage) {
-  const s = String(stage || '').toLowerCase();
-  return s === 'won' || s === 'lost' || s === 'no opportunity';
+  const s = String(stage || '').toLowerCase().trim();
+  if (isMasterMode()) {
+    return s === 'closed won' || s === 'closed lost' || s === 'won' || s === 'lost';
+  }
+  return s === 'won' || s === 'lost' || s === 'no opportunity' || s === 'closed won' || s === 'closed lost';
 }
 
 function renderDashboard() {
@@ -2336,10 +2471,35 @@ function renderDashboard() {
     const card = node.closest('.kpi-card');
     if (card && tip) card.title = tip;
   }
-  setKpi('kpiTotal', total, total + ' customers with a company name in Sales Tracker');
-  setKpi('kpiActive', active, active + ' open opportunities (not Won / Lost / No Opportunity)');
-  setKpi('kpiCriticalHigh', criticalHigh, criticalHigh + ' companies with Critical or High priority');
-  setKpi('kpiOverdue', overdue, overdue + ' open deals with follow-up date before today');
+  if (isMasterMode()) {
+    const hot = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'hot'; }).length;
+    const warm = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'warm'; }).length;
+    const cold = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'cold'; }).length;
+    const highP = companies.filter(function(c) {
+      return !isClosedStage(c.sales_stage) && String(c.priority || '').toLowerCase() === 'high';
+    }).length;
+    setKpi('kpiTotal', total, total + ' companies on Master Data');
+    setKpi('kpiActive', active, active + ' open (not Closed Won / Closed Lost)');
+    setKpi('kpiCriticalHigh', highP, highP + ' open deals with High priority');
+    setKpi('kpiOverdue', hot, hot + ' Hot / ' + warm + ' Warm / ' + cold + ' Cold');
+    const labCH = document.querySelector('#kpiCriticalHigh') && document.querySelector('#kpiCriticalHigh').parentElement
+      ? document.querySelector('#kpiCriticalHigh').parentElement.querySelector('.kpi-label') : null;
+    const labOd = document.querySelector('#kpiOverdue') && document.querySelector('#kpiOverdue').parentElement
+      ? document.querySelector('#kpiOverdue').parentElement.querySelector('.kpi-label') : null;
+    if (labCH) labCH.textContent = 'High Priority (open)';
+    if (labOd) labOd.textContent = 'Hot (Opp Status)';
+  } else {
+    setKpi('kpiTotal', total, total + ' customers with a company name in Sales Tracker');
+    setKpi('kpiActive', active, active + ' open opportunities (not Won / Lost / No Opportunity)');
+    setKpi('kpiCriticalHigh', criticalHigh, criticalHigh + ' companies with Critical or High priority');
+    setKpi('kpiOverdue', overdue, overdue + ' open deals with follow-up date before today');
+    const labCH = document.querySelector('#kpiCriticalHigh') && document.querySelector('#kpiCriticalHigh').parentElement
+      ? document.querySelector('#kpiCriticalHigh').parentElement.querySelector('.kpi-label') : null;
+    const labOd = document.querySelector('#kpiOverdue') && document.querySelector('#kpiOverdue').parentElement
+      ? document.querySelector('#kpiOverdue').parentElement.querySelector('.kpi-label') : null;
+    if (labCH) labCH.textContent = 'Critical + High';
+    if (labOd) labOd.textContent = 'Overdue Follow-ups';
+  }
 
   // Pipeline by stage
   const stageOrder = ['Lead','Qualified','Need Identified','Technical Discussion','Demo / Sample','Proposal Sent','Negotiation','Waiting Customer Decision','Purchase Order','Won','Lost','Decision time taking long','No Opportunity'];
@@ -2379,17 +2539,24 @@ function renderDashboard() {
   }
   if (el('priorityCard')) el('priorityCard').style.display = '';
 
-  // Top 10 + Executed Sales tables (also used by Refresh buttons)
-  renderTop10Table(companies);
-  renderExecutedSalesTable(companies);
-  if (el('top10Card')) el('top10Card').style.display = '';
-  if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
-  if (el('pptReportCard')) el('pptReportCard').style.display = '';
-  updatePptTemplateStatus();
-  try {
-    const sEl = document.getElementById('swotStrengths');
-    if (sEl && !String(sEl.value || '').trim()) refreshAutoSwot(true);
-  } catch (e) {}
+  // Top 10 + Executed Sales + PPT — Tracker mode only
+  if (isTrackerMode()) {
+    renderTop10Table(companies);
+    renderExecutedSalesTable(companies);
+    if (el('top10Card')) el('top10Card').style.display = '';
+    if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
+    if (el('pptReportCard')) el('pptReportCard').style.display = '';
+    updatePptTemplateStatus();
+    try {
+      const sEl = document.getElementById('swotStrengths');
+      if (sEl && !String(sEl.value || '').trim()) refreshAutoSwot(true);
+    } catch (e) {}
+  } else {
+    if (el('top10Card')) el('top10Card').style.display = 'none';
+    if (el('executedSalesCard')) el('executedSalesCard').style.display = 'none';
+    if (el('pptReportCard')) el('pptReportCard').style.display = 'none';
+  }
+  applyModeUI();
 
   // Other metrics
   const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
@@ -2739,7 +2906,24 @@ function editCompany(rowIndex, sheetName) {
   document.getElementById('editCompanyIndustry').textContent = company.industry || 'No industry';
   document.getElementById('editCompanyStatus').textContent = (company.opp_status || '') + ' | ' + (company.sales_stage || '');
 
-  const fields = [
+  const fields = isMasterMode() ? [
+    {key:'name',label:'Company Name',type:'text'},
+    {key:'brand_name',label:'Brand Name',type:'text'},
+    {key:'location',label:'Location',type:'text'},
+    {key:'industry',label:'Industry',type:'text'},
+    {key:'opp_status',label:'Opp Status',type:'select',options:['Hot','Warm','Cold']},
+    {key:'sales_stage',label:'Sales Stage',type:'select',options:['Lead','Contacted','Demo','Proposal','Negotiation','Closed Won','Closed Lost']},
+    {key:'priority',label:'Priority',type:'select',options:['High','Medium','Low']},
+    {key:'est_value',label:'Est. Value (ETB)',type:'number'},
+    {key:'probability',label:'Probability %',type:'number'},
+    {key:'last_contact_date',label:'Last Visit',type:'date'},
+    {key:'next_action',label:'Next Action',type:'text'},
+    {key:'contact_person',label:'Contact Person',type:'text'},
+    {key:'phone',label:'Phone',type:'text'},
+    {key:'notes',label:'Notes',type:'textarea'},
+    {key:'application_type',label:'Application Type',type:'text'},
+    {key:'model',label:'Model',type:'text'},
+  ] : [
     {key:'name',label:'Company Name',type:'text'},
     {key:'industry',label:'Industry',type:'select',options:['Water Bottling','Beverage - Brewing','Beverage - Wine','Beverage - Alcohol','Beverage - Juice','Soft Drink','Food Processing','Dairy','Pharmaceutical','Cosmetics','Soap Manufacturing','Edible Oil','Paint Manufacturing','Chemicals Manufacturing','Plastic Pipe Manufacturing','Cable Manufacturing','Coffee Processing/Trading','Tobacco','Manufacturing','Agriculture/Livestock']},
     {key:'contact_person',label:'Contact Person',type:'text'},
@@ -2850,8 +3034,10 @@ function saveCompanyEdit() {
   const canonMap = buildCanonicalToHeaderKey(headers);
 
   const row = data[editingCompanyIndex];
-  // Editable inputs only — never push formula-driven fields (priority, probability, next_action, rank)
-  const fields = ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner','opportunities','support_needed','plan_by_when','executed_product','executed_uom','executed_quantity','executed_date'];
+  // Editable inputs only — never push formula-driven fields
+  const fields = isMasterMode()
+    ? ['name','brand_name','location','industry','opp_status','sales_stage','priority','est_value','probability','last_contact_date','next_action','contact_person','phone','notes','application_type','model']
+    : ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner','opportunities','support_needed','plan_by_when','executed_product','executed_uom','executed_quantity','executed_date'];
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
     if (!el) return;
@@ -2859,13 +3045,12 @@ function saveCompanyEdit() {
     if (actualKey != null && headerMap[actualKey] !== undefined) {
       let v = el.value;
       if (f === 'plan_by_when' || f === 'executed_date') {
-        // Human-readable on Drive: 24-Aug-2026
         if (v) v = formatDateDDMMMYYYY(v);
       } else if (f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
         const serial = toExcelDateSerial(v);
         if (serial != null) v = serial;
       }
-      if (f === 'executed_quantity' || f === 'est_value' || f === 'total_contacted') {
+      if (f === 'executed_quantity' || f === 'est_value' || f === 'total_contacted' || f === 'probability') {
         const n = parseFloat(String(v).replace(/,/g, ''));
         if (isFinite(n) && String(v).trim() !== '') v = n;
       }
@@ -3024,7 +3209,25 @@ function deleteCompanyRow() {
 }
 
 // ==================== ADD COMPANY ====================
-function openAddCompany() { openModal('modalAddCompany'); }
+function openAddCompany() {
+  const stage = document.getElementById('acStage');
+  const rel = document.getElementById('acRelationship');
+  if (stage) {
+    if (isMasterMode()) {
+      stage.innerHTML = '<option selected>Lead</option><option>Contacted</option><option>Demo</option><option>Proposal</option><option>Negotiation</option><option>Closed Won</option><option>Closed Lost</option>';
+    } else {
+      stage.innerHTML = '<option selected>Lead</option><option>Qualified</option><option>Need Identified</option><option>Technical Discussion</option><option>Demo / Sample</option><option>Proposal Sent</option><option>Negotiation</option><option>Waiting Customer Decision</option><option>Purchase Order</option><option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>';
+    }
+  }
+  if (rel) {
+    if (isMasterMode()) {
+      rel.innerHTML = '<option>Hot</option><option selected>Warm</option><option>Cold</option>';
+    } else {
+      rel.innerHTML = '<option>Good Relationship</option><option selected>Warm</option><option>Cold</option>';
+    }
+  }
+  openModal('modalAddCompany');
+}
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 
@@ -3074,7 +3277,12 @@ function saveCompany() {
   const val = parseFloat(g('acValue')) || 0;
   if (val) setVal('est_value', val);
   setVal('next_follow_up_date', toExcelDateSerial(g('acFollowUp')) ?? g('acFollowUp'));
-  setVal('relationship_level', g('acRelationship') || 'Warm');
+  if (isMasterMode()) {
+    // Master Data uses Opp Status (Hot/Warm/Cold) — reuse Relationship control in Add form
+    setVal('opp_status', g('acRelationship') || 'Warm');
+  } else {
+    setVal('relationship_level', g('acRelationship') || 'Warm');
+  }
   setVal('sales_owner', g('acOwner') || 'Yosef Getu');
   // Top-10 plan fields (Opportunities ≠ Opportunity Summary / Notes)
   setVal('opportunities', g('acOpportunities'));
@@ -3876,7 +4084,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     const col = headerColMap[key];
     let val = values[key];
     if (val === undefined || val === null || val === '') return;
-    if (typeof FORMULA_ONLY_FIELDS !== 'undefined' && FORMULA_ONLY_FIELDS.has(key)) return;
+    if (isFormulaOnlyField(key)) return;
     if (/^priority$|probability|priority_score|days_since|next_action|follow_up_status|rank/i.test(key)) return;
     if (!valueByCol[col] || preferKey(key, valueByCol[col].key) === key) {
       valueByCol[col] = { key: key, val: val };
@@ -3926,14 +4134,14 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     }
     if (val !== undefined && val !== null && val !== '') val = coerceValueForExcel(key, val);
     // Never push form values into calculated columns (Days Since, Probability, Rank, …)
-    if (FORMULA_ONLY_FIELDS.has(key) || FORMULA_ONLY_FIELDS.has(key.replace(/_+/g, '_'))) {
+    if (isFormulaOnlyField(key)) {
       val = undefined; // force formula-only path
     }
     const hasValue = val !== undefined && val !== null && val !== '';
 
     // If this is a formula column but template cell had no formula, search nearby rows
     let useFormulaEl = formulaEl;
-    if (!useFormulaEl && (FORMULA_ONLY_FIELDS.has(key) || /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key))) {
+    if (!useFormulaEl && (isFormulaOnlyField(key) || (!isMasterMode() && /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key)))) {
       const rows = ssChildren(sheetDataEl, 'row');
       for (let i = 0; i < Math.min(rows.length, 30); i++) {
         const c = ssChildren(rows[i], 'c').find(cell => {
@@ -3946,7 +4154,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     }
 
     // Always write formula columns even when template had no formula node
-    const isFormulaCol = FORMULA_ONLY_FIELDS.has(key) || /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key);
+    const isFormulaCol = isFormulaOnlyField(key) || (!isMasterMode() && /days_since|probability|priority_score|^priority$|next_action|follow_up_status|rank/i.test(key));
     if (!useFormulaEl && !hasValue && !isFormulaCol) return; // keep row minimal
 
     const newCell = ssEl(doc, 'c');
@@ -4141,7 +4349,7 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
     writtenCols.add(col);
 
     // Never write formula-only calculated columns from the edit form
-    if (FORMULA_ONLY_FIELDS.has(key)) return;
+    if (isFormulaOnlyField(key)) return;
     if (/^priority$|^probability|priority_score|days_since|next_action|follow_up_status|rank_helper|^rank$/i.test(key)) return;
 
     const colRef = colLetters(col) + rowNum;
@@ -4365,8 +4573,8 @@ async function generateSafeWorkbookBuffer() {
 
     }
 
-    // Always keep Rank (helper) open-deal-only so Excel Dashboard Top 10 ignores Won/Lost
-    if (/sales\s*tracker|customer/i.test(sheetName) || sheetName === findTargetSheetName()) {
+    // Rank (helper) only on Sales Tracker — not Master Data
+    if (isTrackerMode() && (/sales\s*tracker|customer/i.test(sheetName) || sheetName === findTargetSheetName())) {
       try { patchOpenOnlyRankFormulas(doc, sheetDataEl, headerColMap); } catch (e) {
         console.warn('[SBA] Rank patch failed', e);
       }
