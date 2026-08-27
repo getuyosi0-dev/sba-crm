@@ -214,6 +214,8 @@ body { padding-bottom: 80px; }
     <a href="#" class="nav-link" onclick="navigate('weekly')">Weekly</a>
     <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
   </div>
+  <button type="button" onclick="openModeModal()" style="margin-right:10px;padding:6px 12px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.15);color:#fff;cursor:pointer;">Mode</button>
+  <span id="workbookModeBadgeDesktop" style="display:none;font-size:11px;font-weight:600;color:#fff;background:rgba(255,255,255,0.2);padding:4px 10px;border-radius:12px;margin-right:10px;"></span>
   <div class="drive-status disconnected" id="driveStatus">
     <span class="drive-dot"></span><span id="driveStatusText">Disconnected</span>
   </div>
@@ -472,7 +474,9 @@ body { padding-bottom: 80px; }
 
   <div class="card">
     <div class="card-title">Your Drive Files</div>
-    <button class="btn btn-primary" onclick="showFilePicker()" style="margin-bottom:16px;">Select Excel File</button>
+    <button class="btn btn-primary" onclick="showFilePicker()" style="margin-bottom:10px;">Select Excel File</button>
+    <button class="btn btn-secondary" onclick="openModeModal()" style="margin-bottom:16px;">Change workbook mode</button>
+    <p id="driveModeHint" style="font-size:12px;color:var(--text-light);margin:0 0 12px;">Mode controls which sheet and forms the app uses (Sales Tracker vs Master Data).</p>
     <div id="driveFilesList"></div>
   </div>
 </div>
@@ -705,7 +709,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-master-tech-slots';
+const SBA_APP_VERSION = 'sba25-2026-08-27-mode-switch-fix';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -750,19 +754,26 @@ function isFormulaOnlyField(key) {
 
 function confirmWorkbookMode(mode, silent) {
   if (mode !== 'master' && mode !== 'tracker') return;
+  const prev = workbookMode;
   saveWorkbookMode(mode);
   try { closeModal('modalWorkbookMode'); } catch (e) {}
   applyModeUI();
   if (!silent) {
-    showToast(mode === 'master' ? 'Master Data mode' : 'Sales Tracker mode', 'success');
+    showToast(
+      (mode === 'master' ? 'Switched to Master Data mode' : 'Switched to Sales Tracker mode') +
+      (prev && prev !== mode ? ' (was ' + prev + ')' : ''),
+      'success'
+    );
   }
   try {
     renderDashboard();
     renderCompanies();
+    if (typeof updateFileUI === 'function') updateFileUI();
   } catch (e) { console.warn(e); }
   if (isTrackerMode()) {
     setTimeout(function() { try { maybeAutoWeeklyReport(); } catch (e) {} }, 500);
   }
+  console.log('[SBA] Workbook mode set to', mode, 'file', currentFile && currentFile.id);
 }
 
 /** Show/hide Tracker-only vs Master-only UI */
@@ -782,10 +793,16 @@ function applyModeUI() {
       el.style.display = master ? 'none' : '';
     }
   });
+  const label = master ? 'Master Data' : (workbookMode === 'tracker' ? 'Sales Tracker' : '');
   const modeBadge = document.getElementById('workbookModeBadge');
   if (modeBadge) {
-    modeBadge.textContent = master ? 'Mode: Master Data' : (workbookMode === 'tracker' ? 'Mode: Sales Tracker' : '');
-    modeBadge.style.display = workbookMode ? 'inline-block' : 'none';
+    modeBadge.textContent = label ? ('Mode: ' + label) : '';
+    modeBadge.style.display = label ? 'inline-block' : 'none';
+  }
+  const modeBadgeD = document.getElementById('workbookModeBadgeDesktop');
+  if (modeBadgeD) {
+    modeBadgeD.textContent = label ? ('Mode: ' + label) : '';
+    modeBadgeD.style.display = label ? 'inline-block' : 'none';
   }
   const trackerForm = document.getElementById('addFormTracker');
   const masterForm = document.getElementById('addFormMaster');
@@ -3365,13 +3382,24 @@ function openAddCompany() {
   openModal('modalAddCompany');
 }
 function openModeModal() {
-  const hint = document.getElementById('modeCurrentHint');
-  if (hint) {
-    if (workbookMode === 'master') hint.textContent = 'Current: Master Data CRM — pick again to switch.';
-    else if (workbookMode === 'tracker') hint.textContent = 'Current: Sales Tracker CRM — pick again to switch.';
-    else hint.textContent = 'No mode selected yet for this file.';
+  try {
+    const hint = document.getElementById('modeCurrentHint');
+    if (hint) {
+      if (workbookMode === 'master') hint.textContent = 'Current: Master Data CRM — tap Master or Tracker below to switch.';
+      else if (workbookMode === 'tracker') hint.textContent = 'Current: Sales Tracker CRM — tap Master or Tracker below to switch.';
+      else hint.textContent = 'No mode selected yet for this file.';
+    }
+    const el = document.getElementById('modalWorkbookMode');
+    if (!el) {
+      showToast('Mode dialog missing — hard-refresh the page', 'error');
+      console.error('[SBA] modalWorkbookMode not in DOM');
+      return;
+    }
+    openModal('modalWorkbookMode');
+  } catch (e) {
+    console.error('[SBA] openModeModal', e);
+    showToast('Could not open mode dialog: ' + (e.message || e), 'error');
   }
-  openModal('modalWorkbookMode');
 }
 function closeModeModal() {
   closeModal('modalWorkbookMode');
