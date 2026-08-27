@@ -596,7 +596,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-rank-unique';
+const SBA_APP_VERSION = 'sba25-2026-08-27-drive-shared-picker';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -839,15 +839,42 @@ function summarizeDriveErrorBody(bodyText) {
 function showFilePicker() {
   if (!accessToken) { showToast('Please sign in first', 'error'); return; }
   if (!confirmDiscardUnsaved('change file')) return;
-  const view = new google.picker.View(google.picker.ViewId.DOCS);
-  view.setMimeTypes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel');
+
+  // Note: each Google login only sees THAT account's Drive (+ files shared with it).
+  const xlsxMimes = [
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-excel',
+    'application/vnd.google-apps.spreadsheet'
+  ].join(',');
+
+  const viewMine = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(false)
+    .setOwnedByMe(true)
+    .setMimeTypes(xlsxMimes)
+    .setMode(google.picker.DocsViewMode.LIST);
+
+  const viewShared = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(false)
+    .setOwnedByMe(false)
+    .setMimeTypes(xlsxMimes)
+    .setMode(google.picker.DocsViewMode.LIST);
+
+  const viewAll = new google.picker.DocsView()
+    .setIncludeFolders(true)
+    .setSelectFolderEnabled(false)
+    .setMode(google.picker.DocsViewMode.LIST);
+
   const picker = new google.picker.PickerBuilder()
-    .enableFeature(google.picker.Feature.NAV_HIDDEN)
     .enableFeature(google.picker.Feature.SUPPORT_DRIVES)
     .setAppId(CLIENT_ID.split('-')[0])
     .setOAuthToken(accessToken)
     .setDeveloperKey(API_KEY)
-    .addView(view)
+    .setTitle('Select SBA Excel workbook')
+    .addView(viewMine)
+    .addView(viewShared)
+    .addView(viewAll)
     .addView(new google.picker.DocsUploadView())
     .setCallback(pickerCallback)
     .build();
@@ -5529,21 +5556,42 @@ function showSheet(index) {
 // ==================== DRIVE FILES LIST ====================
 function listDriveFiles() {
   if (!accessToken) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Sign in to see files</p>'; return; }
+  // Include owned + shared; .xlsx, legacy .xls, and Google Sheets (shared often becomes Sheets)
+  const q = "trashed=false and (" +
+    "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or " +
+    "mimeType='application/vnd.ms-excel' or " +
+    "mimeType='application/vnd.google-apps.spreadsheet')";
   gapi.client.drive.files.list({
-    q: "mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' or mimeType='application/vnd.ms-excel'",
-    pageSize: 20, fields: 'files(id,name,modifiedTime,size)'
+    q: q,
+    pageSize: 50,
+    orderBy: 'modifiedTime desc',
+    fields: 'files(id,name,modifiedTime,size,mimeType,owners,shared)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true,
+    corpora: 'user'
   }).then(response => {
     const files = response.result.files;
-    if (!files || files.length === 0) { document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">No Excel files found in Drive</p>'; return; }
-    document.getElementById('driveFilesList').innerHTML = files.map(f => `
-      <div class="file-card" onclick="selectDriveFile('${f.id}', '${f.name.replace(/'/g, "\'")}')">
-        <div class="file-icon">📊</div>
-        <div class="file-info"><div class="file-name">${f.name}</div><div class="file-meta">${new Date(f.modifiedTime).toLocaleDateString()} &bull; Tap to open</div></div>
-      </div>
-    `).join('');
+    if (!files || files.length === 0) {
+      document.getElementById('driveFilesList').innerHTML =
+        '<p class="empty-state">No spreadsheet files found for <strong>this</strong> Google account.<br><br>' +
+        'If another account owns the file: open Drive as that owner → Share → add this email as <strong>Editor</strong>. ' +
+        'Then on this account open Drive → <strong>Shared with me</strong> and confirm it appears. ' +
+        'Also use Select Excel File and switch to the shared / all files view in the picker.</p>';
+      return;
+    }
+    document.getElementById('driveFilesList').innerHTML = files.map(f => {
+      const safeName = String(f.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const sharedTag = f.shared ? ' · shared' : '';
+      const kind = (f.mimeType || '').indexOf('google-apps.spreadsheet') !== -1 ? 'Sheets' : 'Excel';
+      return '<div class="file-card" onclick="selectDriveFile(\'' + f.id + '\', \'' + safeName + '\')">' +
+        '<div class="file-icon">📊</div>' +
+        '<div class="file-info"><div class="file-name">' + escapeHtml(f.name || '') + '</div>' +
+        '<div class="file-meta">' + new Date(f.modifiedTime).toLocaleDateString() + ' · ' + kind + sharedTag + ' · Tap to open</div></div></div>';
+    }).join('');
   }).catch(err => {
     console.error('List error:', err);
-    document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">Failed to list files</p>';
+    const msg = (err && err.result && err.result.error && err.result.error.message) || (err && err.message) || 'Failed to list files';
+    document.getElementById('driveFilesList').innerHTML = '<p class="empty-state">' + escapeHtml(String(msg)) + '</p>';
   });
 }
 
