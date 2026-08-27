@@ -223,7 +223,7 @@ body { padding-bottom: 80px; }
 <header class="app-header mobile-only">
   <h1 id="pageTitle">Dashboard</h1>
   <span id="workbookModeBadge" style="display:none;font-size:11px;font-weight:600;color:var(--primary);background:#e8f1fa;padding:4px 10px;border-radius:12px;margin-left:8px;vertical-align:middle;"></span>
-  <button type="button" class="edit-btn" style="margin-left:6px;" onclick="openModal('modalWorkbookMode')" title="Switch workbook mode">Mode</button>
+  <button type="button" class="edit-btn" style="margin-left:6px;" onclick="openModeModal()" title="Switch workbook mode">Mode</button>
   <div class="drive-status disconnected" id="mobileDriveStatus">
     <span class="drive-dot"></span><span id="mobileDriveStatusText">Disconnected</span>
   </div>
@@ -498,65 +498,116 @@ body { padding-bottom: 80px; }
 <!-- Add Company Modal -->
 <div class="modal-overlay" id="modalAddCompany">
   <div class="modal-sheet">
-    <div class="modal-header"><div class="modal-title">Add Company</div><button class="modal-close" onclick="closeModal('modalAddCompany')">&times;</button></div>
+    <div class="modal-header"><div class="modal-title" id="addCompanyModalTitle">Add Company</div><button class="modal-close" onclick="closeModal('modalAddCompany')">&times;</button></div>
     <div class="modal-body">
-      <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Only enter inputs Excel needs. Probability, Priority Score, Rank, Days Since Visit, Next Action and Follow-up Status are calculated automatically.</p>
-      <div class="form-group"><label class="form-label">Company Name *</label><input type="text" class="form-input" id="acName"></div>
-      <div class="form-group">
-        <label class="form-label">Industry</label>
-        <select class="form-select" id="acIndustry">
-          <option value="">Select Industry</option>
-          <option>Water Bottling</option><option>Beverage - Brewing</option><option>Beverage - Wine</option>
-          <option>Beverage - Alcohol</option><option>Beverage - Juice</option><option>Soft Drink</option>
-          <option>Food Processing</option><option>Dairy</option><option>Pharmaceutical</option>
-          <option>Cosmetics</option><option>Soap Manufacturing</option><option>Edible Oil</option>
-          <option>Paint Manufacturing</option><option>Chemicals Manufacturing</option>
-          <option>Plastic Pipe Manufacturing</option><option>Cable Manufacturing</option>
-          <option>Coffee Processing/Trading</option><option>Tobacco</option><option>Manufacturing</option>
-          <option>Agriculture/Livestock</option>
-        </select>
+      <div id="addFormTracker">
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Sales Tracker inputs. Probability, Priority Score, Rank, Days Since Visit, Next Action and Follow-up Status stay as Excel formulas.</p>
+        <div class="form-group"><label class="form-label">Company Name *</label><input type="text" class="form-input" id="acName"></div>
+        <div class="form-group">
+          <label class="form-label">Industry</label>
+          <select class="form-select" id="acIndustry">
+            <option value="">Select Industry</option>
+            <option>Water Bottling</option><option>Beverage - Brewing</option><option>Beverage - Wine</option>
+            <option>Beverage - Alcohol</option><option>Beverage - Juice</option><option>Soft Drink</option>
+            <option>Food Processing</option><option>Dairy</option><option>Pharmaceutical</option>
+            <option>Cosmetics</option><option>Soap Manufacturing</option><option>Edible Oil</option>
+            <option>Paint Manufacturing</option><option>Chemicals Manufacturing</option>
+            <option>Plastic Pipe Manufacturing</option><option>Cable Manufacturing</option>
+            <option>Coffee Processing/Trading</option><option>Tobacco</option><option>Manufacturing</option>
+            <option>Agriculture/Livestock</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acContact"></div>
+        <div class="form-group"><label class="form-label">First Contact Date</label><input type="date" class="form-input" id="acFirstContact"></div>
+        <div class="form-group"><label class="form-label">Last Contact Date</label><input type="date" class="form-input" id="acLastContact"></div>
+        <div class="form-group"><label class="form-label">Total Contacted</label><input type="number" class="form-input" id="acTotalContacted" min="0" value="1"></div>
+        <div class="form-group"><label class="form-label">Current Supplier</label><input type="text" class="form-input" id="acSupplier" placeholder="e.g. Domino, Videojet, Markem-imaje"></div>
+        <div class="form-group">
+          <label class="form-label">Sales Potential</label>
+          <select class="form-select" id="acPotential"><option>High</option><option selected>Medium</option><option>Low</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Sales Stage</label>
+          <select class="form-select" id="acStage">
+            <option selected>Lead</option><option>Qualified</option><option>Need Identified</option>
+            <option>Technical Discussion</option><option>Demo / Sample</option><option>Proposal Sent</option>
+            <option>Negotiation</option><option>Waiting Customer Decision</option><option>Purchase Order</option>
+            <option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Opportunity Summary / Notes</label><textarea class="form-textarea" id="acNotes" placeholder="General CRM notes"></textarea></div>
+        <div class="form-group"><label class="form-label">Est. Business Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Next Follow-up Date</label><input type="date" class="form-input" id="acFollowUp"></div>
+        <div class="form-group">
+          <label class="form-label">Relationship Level</label>
+          <select class="form-select" id="acRelationship">
+            <option>Good Relationship</option><option selected>Warm</option><option>Cold</option>
+          </select>
+        </div>
+        <div class="form-group"><label class="form-label">Sales Owner</label><input type="text" class="form-input" id="acOwner" value="Yosef Getu"></div>
+        <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Top-10 plan (optional)</div>
+        <div class="form-group"><label class="form-label">Opportunities (Top-10)</label><input type="text" class="form-input" id="acOpportunities"></div>
+        <div class="form-group"><label class="form-label">Support Needed</label><input type="text" class="form-input" id="acSupport"></div>
+        <div class="form-group"><label class="form-label">Plan By When</label><input type="date" class="form-input" id="acPlanWhen"></div>
+        <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Executed sale (optional)</div>
+        <div class="form-group"><label class="form-label">Executed Product</label><input type="text" class="form-input" id="acExecProduct"></div>
+        <div class="form-group"><label class="form-label">Executed UOM</label><input type="text" class="form-input" id="acExecUom"></div>
+        <div class="form-group"><label class="form-label">Executed Quantity</label><input type="number" class="form-input" id="acExecQty" min="0"></div>
+        <div class="form-group"><label class="form-label">Executed Date</label><input type="date" class="form-input" id="acExecDate"></div>
       </div>
-      <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acContact"></div>
-      <div class="form-group"><label class="form-label">First Contact Date</label><input type="date" class="form-input" id="acFirstContact"></div>
-      <div class="form-group"><label class="form-label">Last Contact Date</label><input type="date" class="form-input" id="acLastContact"></div>
-      <div class="form-group"><label class="form-label">Total Contacted</label><input type="number" class="form-input" id="acTotalContacted" min="0" value="1"></div>
-      <div class="form-group"><label class="form-label">Current Supplier</label><input type="text" class="form-input" id="acSupplier" placeholder="e.g. Domino, Videojet, Markem-imaje"></div>
-      <div class="form-group">
-        <label class="form-label">Sales Potential</label>
-        <select class="form-select" id="acPotential"><option>High</option><option selected>Medium</option><option>Low</option></select>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Sales Stage</label>
-        <select class="form-select" id="acStage">
-          <option selected>Lead</option><option>Qualified</option><option>Need Identified</option>
-          <option>Technical Discussion</option><option>Demo / Sample</option><option>Proposal Sent</option>
-          <option>Negotiation</option><option>Waiting Customer Decision</option><option>Purchase Order</option>
-          <option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Opportunity Summary / Notes</label><textarea class="form-textarea" id="acNotes" placeholder="General CRM notes / opportunity summary (not the Top-10 column)"></textarea></div>
-      <div class="form-group"><label class="form-label">Est. Business Value (ETB)</label><input type="number" class="form-input" id="acValue" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Next Follow-up Date</label><input type="date" class="form-input" id="acFollowUp"></div>
-      <div class="form-group">
-        <label class="form-label">Relationship Level</label>
-        <select class="form-select" id="acRelationship">
-          <option>Good Relationship</option><option selected>Warm</option><option>Cold</option>
-        </select>
-      </div>
-      <div class="form-group"><label class="form-label">Sales Owner</label><input type="text" class="form-input" id="acOwner" value="Yosef Getu"></div>
 
-      <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:0.4px;">Top-10 plan (optional)</div>
-      <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;"><strong>Opportunities</strong> here is the Top-10 plan column — separate from Opportunity Summary / Notes above.</p>
-      <div class="form-group"><label class="form-label">Opportunities (Top-10)</label><input type="text" class="form-input" id="acOpportunities" placeholder="Short plan line for Top-10 slide"></div>
-      <div class="form-group"><label class="form-label">Support Needed</label><input type="text" class="form-input" id="acSupport" placeholder="Resources / support needed"></div>
-      <div class="form-group"><label class="form-label">Plan By When</label><input type="date" class="form-input" id="acPlanWhen"></div>
-
-      <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);text-transform:uppercase;letter-spacing:0.4px;">Executed sale (optional — when Won)</div>
-      <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">Add matching columns on Sales Tracker in Excel first (see headers below). One product line per company.</p>
-      <div class="form-group"><label class="form-label">Executed Product</label><input type="text" class="form-input" id="acExecProduct" placeholder="e.g. Board Kit"></div>
-      <div class="form-group"><label class="form-label">Executed UOM</label><input type="text" class="form-input" id="acExecUom" placeholder="e.g. pcs, Bottles, Items"></div>
-      <div class="form-group"><label class="form-label">Executed Quantity</label><input type="number" class="form-input" id="acExecQty" min="0" placeholder="0"></div>
-      <div class="form-group"><label class="form-label">Executed Date</label><input type="date" class="form-input" id="acExecDate"></div>
+      <div id="addFormMaster" style="display:none;">
+        <p style="font-size:12px;color:var(--text-muted);margin:0 0 12px">Master Data fields (same as Excel). Number of Technologies / Brands / Machines and Exp. Revenue stay as Excel formulas.</p>
+        <div class="form-group"><label class="form-label">Company Name *</label><input type="text" class="form-input" id="acMName"></div>
+        <div class="form-group"><label class="form-label">Brand Name</label><input type="text" class="form-input" id="acMBrand"></div>
+        <div class="form-group"><label class="form-label">Location</label><input type="text" class="form-input" id="acMLocation" placeholder="e.g. Sebeta, Addis Ababa"></div>
+        <div class="form-group"><label class="form-label">Industry</label><input type="text" class="form-input" id="acMIndustry" list="acMIndustryList" placeholder="e.g. Water Bottling"></div>
+        <datalist id="acMIndustryList">
+          <option>Water Bottling</option><option>Water Bottling Factories</option><option>Beer &amp; Brewing</option>
+          <option>Soft Drink Factories</option><option>Food Processing</option><option>Dairy</option>
+          <option>Pharmaceutical</option><option>Cosmotics and Personal care</option><option>Chemicals &amp; Paint</option>
+          <option>Wine</option><option>Alcohol and Liquer</option><option>Pipes &amp; Cables</option>
+        </datalist>
+        <div class="form-group">
+          <label class="form-label">Opp Status</label>
+          <select class="form-select" id="acMOppStatus"><option>Hot</option><option selected>Warm</option><option>Cold</option></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Sales Stage</label>
+          <select class="form-select" id="acMStage">
+            <option selected>Lead</option><option>Contacted</option><option>Demo</option>
+            <option>Proposal</option><option>Negotiation</option><option>Closed Won</option><option>Closed Lost</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Priority</label>
+          <select class="form-select" id="acMPriority"><option>High</option><option selected>Medium</option><option>Low</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Est. Value (ETB)</label><input type="number" class="form-input" id="acMValue" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Probability % (0–1 or 0–100)</label><input type="number" class="form-input" id="acMProb" step="0.01" placeholder="e.g. 0.5 or 50"></div>
+        <div class="form-group"><label class="form-label">Last Visit</label><input type="date" class="form-input" id="acMLastVisit"></div>
+        <div class="form-group"><label class="form-label">Next Action</label><input type="text" class="form-input" id="acMNextAction"></div>
+        <div class="form-group"><label class="form-label">Contact Person</label><input type="text" class="form-input" id="acMContact"></div>
+        <div class="form-group"><label class="form-label">Phone</label><input type="text" class="form-input" id="acMPhone"></div>
+        <div class="form-group"><label class="form-label">Application Type</label><input type="text" class="form-input" id="acMAppType" list="acMAppList" placeholder="Date Coding"></div>
+        <datalist id="acMAppList"><option>Date Coding</option><option>Batch Coding</option><option>Serial Coding</option><option>Barcode</option><option>QR Code</option></datalist>
+        <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Technology &amp; machines (slot 1)</div>
+        <div class="form-group">
+          <label class="form-label">Technology 1</label>
+          <select class="form-select" id="acMTech1"><option value=""></option><option>Laser</option><option>CIJ</option><option>TTO</option><option>TIJ</option><option>Valve Jet</option><option>UV</option><option>Fiber</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Tech Machines 1</label><input type="number" class="form-input" id="acMTechM1" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Machine Brand 1</label>
+          <select class="form-select" id="acMBrand1"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Machines 1</label><input type="number" class="form-input" id="acMMach1" min="0"></div>
+        <div class="form-group"><label class="form-label">Model</label><input type="text" class="form-input" id="acMModel"></div>
+        <div class="form-group"><label class="form-label">Mfg Year</label><input type="text" class="form-input" id="acMMfgYear"></div>
+        <div class="form-group"><label class="form-label">Prod Lines</label><input type="text" class="form-input" id="acMProdLines"></div>
+        <div class="form-group"><label class="form-label">Line Speed (u/hour)</label><input type="text" class="form-input" id="acMLineSpeed"></div>
+        <div class="form-group"><label class="form-label">Notes</label><textarea class="form-textarea" id="acMNotes"></textarea></div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modalAddCompany')">Cancel</button>
@@ -565,22 +616,22 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
-<!-- Workbook mode chooser (user selects — no auto-guess by file name) -->
 <div class="modal-overlay" id="modalWorkbookMode">
   <div class="modal-sheet">
-    <div class="modal-header"><div class="modal-title">Choose workbook type</div></div>
+    <div class="modal-header">
+      <div class="modal-title">Choose workbook type</div>
+      <button class="modal-close" onclick="closeModeModal()">&times;</button>
+    </div>
     <div class="modal-body">
       <p style="font-size:13px;color:var(--text-light);margin:0 0 14px;line-height:1.45;">
-        This file can be used in different ways. Pick the type that matches the Excel you opened so the app uses the correct sheet and fields.
+        Pick the type that matches this Excel file. You can change this later with the <strong>Mode</strong> button on the header.
       </p>
-      <button type="button" class="btn btn-primary" style="margin-bottom:10px;" onclick="confirmWorkbookMode('tracker')">
-        Sales Tracker CRM
-      </button>
+      <p id="modeCurrentHint" style="font-size:12px;color:var(--primary);margin:0 0 12px;font-weight:600;"></p>
+      <button type="button" class="btn btn-primary" style="margin-bottom:10px;" onclick="confirmWorkbookMode('tracker')">Sales Tracker CRM</button>
       <p style="font-size:11px;color:var(--text-light);margin:0 0 14px;">Customer Sales Tracker — priority score, weekly report, executed sales, Rank / Top 10.</p>
-      <button type="button" class="btn btn-secondary" onclick="confirmWorkbookMode('master')">
-        Master Data CRM
-      </button>
-      <p style="font-size:11px;color:var(--text-light);margin:0;">SBA Workbook — Master Data sheet, Hot/Warm/Cold, Closed Won/Lost. Dashboard formulas stay in Excel.</p>
+      <button type="button" class="btn btn-secondary" style="margin-bottom:10px;" onclick="confirmWorkbookMode('master')">Master Data CRM</button>
+      <p style="font-size:11px;color:var(--text-light);margin:0 0 16px;">SBA Workbook — Master Data sheet, Hot/Warm/Cold, Closed Won/Lost.</p>
+      <button type="button" class="btn btn-secondary" onclick="closeModeModal()">Cancel / keep current</button>
     </div>
   </div>
 </div>
@@ -618,7 +669,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-master-mode';
+const SBA_APP_VERSION = 'sba25-2026-08-27-master-add-form';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -695,13 +746,10 @@ function applyModeUI() {
     modeBadge.textContent = master ? 'Mode: Master Data' : (workbookMode === 'tracker' ? 'Mode: Sales Tracker' : '');
     modeBadge.style.display = workbookMode ? 'inline-block' : 'none';
   }
-  // Add-company help text
-  const addHint = document.querySelector('#modalAddCompany .modal-body > p');
-  if (addHint) {
-    addHint.textContent = master
-      ? 'Master Data: fill company inputs. Exp. Revenue and machine/brand counts stay as Excel formulas.'
-      : 'Only enter inputs Excel needs. Probability, Priority Score, Rank, Days Since Visit, Next Action and Follow-up Status are calculated automatically.';
-  }
+  const trackerForm = document.getElementById('addFormTracker');
+  const masterForm = document.getElementById('addFormMaster');
+  if (trackerForm) trackerForm.style.display = master ? 'none' : '';
+  if (masterForm) masterForm.style.display = master ? '' : 'none';
 }
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -714,6 +762,14 @@ const FIELD_ALIASES = {
   name: ['name', 'company', 'company_name', 'companyname', 'account', 'account_name', 'customer', 'customer_name', 'client', 'client_name'],
   brand_name: ['brand_name', 'brand', 'brandname', 'product_brand'],
   model: ['model', 'machine_model', 'printer_model'],
+  technology_1: ['technology_1', 'technology1', 'tech_1', 'technology'],
+  tech_machines_1: ['tech_machines_1', 'tech_machines1', 'tech_machine_1', 'machines_tech_1'],
+  machine_brand_1: ['machine_brand_1', 'machine_brand1', 'machine_brand', 'brand_machine_1'],
+  machines_1: ['machines_1', 'machines1', 'machine_count_1'],
+  mfg_year: ['mfg_year', 'mfg_year_', 'year', 'manufacture_year', 'manufacturing_year'],
+  prod_lines: ['prod_lines', 'prod_lines_', 'production_lines', 'lines'],
+  line_speed: ['line_speed', 'line_speed_u_hour', 'speed', 'line_speed_u_hour_'],
+
   industry: ['industry', 'sector', 'industry_type', 'business_type'],
   location: ['location', 'city', 'address', 'region', 'site', 'place'],
   // Relationship Level is this workbook's "temperature"; also accept older opp_status columns
@@ -3210,30 +3266,48 @@ function deleteCompanyRow() {
 
 // ==================== ADD COMPANY ====================
 function openAddCompany() {
-  const stage = document.getElementById('acStage');
-  const rel = document.getElementById('acRelationship');
-  if (stage) {
-    if (isMasterMode()) {
-      stage.innerHTML = '<option selected>Lead</option><option>Contacted</option><option>Demo</option><option>Proposal</option><option>Negotiation</option><option>Closed Won</option><option>Closed Lost</option>';
-    } else {
-      stage.innerHTML = '<option selected>Lead</option><option>Qualified</option><option>Need Identified</option><option>Technical Discussion</option><option>Demo / Sample</option><option>Proposal Sent</option><option>Negotiation</option><option>Waiting Customer Decision</option><option>Purchase Order</option><option>Won</option><option>Lost</option><option>Decision time taking long</option><option>No Opportunity</option>';
-    }
+  if (!workbookMode) {
+    showToast('Choose workbook mode first (Mode button)', 'warning');
+    openModeModal();
+    return;
   }
-  if (rel) {
-    if (isMasterMode()) {
-      rel.innerHTML = '<option>Hot</option><option selected>Warm</option><option>Cold</option>';
-    } else {
-      rel.innerHTML = '<option>Good Relationship</option><option selected>Warm</option><option>Cold</option>';
-    }
+  const tracker = document.getElementById('addFormTracker');
+  const master = document.getElementById('addFormMaster');
+  const title = document.getElementById('addCompanyModalTitle');
+  if (isMasterMode()) {
+    if (tracker) tracker.style.display = 'none';
+    if (master) master.style.display = '';
+    if (title) title.textContent = 'Add Company (Master Data)';
+  } else {
+    if (tracker) tracker.style.display = '';
+    if (master) master.style.display = 'none';
+    if (title) title.textContent = 'Add Company (Sales Tracker)';
   }
   openModal('modalAddCompany');
+}
+function openModeModal() {
+  const hint = document.getElementById('modeCurrentHint');
+  if (hint) {
+    if (workbookMode === 'master') hint.textContent = 'Current: Master Data CRM — pick again to switch.';
+    else if (workbookMode === 'tracker') hint.textContent = 'Current: Sales Tracker CRM — pick again to switch.';
+    else hint.textContent = 'No mode selected yet for this file.';
+  }
+  openModal('modalWorkbookMode');
+}
+function closeModeModal() {
+  closeModal('modalWorkbookMode');
+  if (!workbookMode && workbook) {
+    showToast('Select a mode to use Dashboard and Companies', 'warning');
+  }
 }
 function closeModal(id) { document.getElementById(id).classList.remove('active'); }
 function openModal(id) { document.getElementById(id).classList.add('active'); }
 
 function saveCompany() {
   if (!workbook) { showToast('Load a file first', 'error'); return; }
-  const name = document.getElementById('acName').value.trim();
+  if (!workbookMode) { showToast('Choose workbook mode first', 'warning'); openModeModal(); return; }
+  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+  const name = isMasterMode() ? g('acMName') : g('acName');
   if (!name) { showToast('Company name is required', 'error'); return; }
 
   const targetName = findTargetSheetName() || workbook.SheetNames[0];
@@ -3243,7 +3317,7 @@ function saveCompany() {
   headers.forEach((h, i) => { if (h) headerMap[normalizeHeader(h)] = i; });
   const canonMap = buildCanonicalToHeaderKey(headers);
   const keySet = new Set(Object.keys(headerMap));
-  console.log('[SBA] Target sheet:', targetName, 'headerRow:', headerRowIndex + 1, 'headers:', headers.filter(Boolean));
+  console.log('[SBA] Target sheet:', targetName, 'headerRow:', headerRowIndex + 1, 'mode:', workbookMode, 'headers sample:', headers.filter(Boolean).slice(0, 12));
 
   const newRow = new Array(Math.max(headers.length, 1)).fill('');
   const setVal = (canonical, val) => {
@@ -3254,47 +3328,68 @@ function saveCompany() {
       return true;
     }
     if (['name', 'industry', 'sales_stage', 'contact_person', 'est_value'].indexOf(canonical) !== -1) {
-      console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).join(', '));
+      console.warn('[SBA] Header not found for field "' + canonical + '". Available:', Array.from(keySet).slice(0, 40).join(', '));
     }
     return false;
   };
 
-  // INPUTS ONLY — never write formula columns (probability, priority score, priority, next action, rank, days since visit, follow-up status)
-  const g = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
-  setVal('name', name);
-  setVal('industry', g('acIndustry'));
-  setVal('contact_person', g('acContact'));
-  setVal('first_contact_date', toExcelDateSerial(g('acFirstContact')) ?? g('acFirstContact'));
-  setVal('last_contact_date', toExcelDateSerial(g('acLastContact')) ?? g('acLastContact'));
-  const totalC = g('acTotalContacted');
-  if (totalC !== '') setVal('total_contacted', parseFloat(totalC) || 0);
-  setVal('current_supplier', g('acSupplier'));
-  setVal('sales_potential', g('acPotential') || 'Medium');
-  setVal('sales_stage', g('acStage') || 'Lead');
-  const notes = g('acNotes');
-  setVal('notes', notes);
-  setVal('opportunity_summary', notes);
-  const val = parseFloat(g('acValue')) || 0;
-  if (val) setVal('est_value', val);
-  setVal('next_follow_up_date', toExcelDateSerial(g('acFollowUp')) ?? g('acFollowUp'));
   if (isMasterMode()) {
-    // Master Data uses Opp Status (Hot/Warm/Cold) — reuse Relationship control in Add form
-    setVal('opp_status', g('acRelationship') || 'Warm');
+    setVal('name', name);
+    setVal('brand_name', g('acMBrand'));
+    setVal('location', g('acMLocation'));
+    setVal('industry', g('acMIndustry'));
+    setVal('opp_status', g('acMOppStatus') || 'Warm');
+    setVal('sales_stage', g('acMStage') || 'Lead');
+    setVal('priority', g('acMPriority') || 'Medium');
+    const mVal = parseFloat(g('acMValue'));
+    if (isFinite(mVal) && g('acMValue') !== '') setVal('est_value', mVal);
+    const mProb = parseFloat(g('acMProb'));
+    if (isFinite(mProb) && g('acMProb') !== '') {
+      // Store as 0–1 if user typed 0–100
+      setVal('probability', mProb > 1 ? mProb / 100 : mProb);
+    }
+    setVal('last_contact_date', toExcelDateSerial(g('acMLastVisit')) ?? g('acMLastVisit'));
+    setVal('next_action', g('acMNextAction'));
+    setVal('contact_person', g('acMContact'));
+    setVal('phone', g('acMPhone'));
+    setVal('application_type', g('acMAppType'));
+    setVal('technology_1', g('acMTech1'));
+    if (g('acMTechM1') !== '') setVal('tech_machines_1', parseFloat(g('acMTechM1')) || 0);
+    setVal('machine_brand_1', g('acMBrand1'));
+    if (g('acMMach1') !== '') setVal('machines_1', parseFloat(g('acMMach1')) || 0);
+    setVal('model', g('acMModel'));
+    setVal('mfg_year', g('acMMfgYear'));
+    setVal('prod_lines', g('acMProdLines'));
+    setVal('line_speed', g('acMLineSpeed'));
+    setVal('notes', g('acMNotes'));
   } else {
+    setVal('name', name);
+    setVal('industry', g('acIndustry'));
+    setVal('contact_person', g('acContact'));
+    setVal('first_contact_date', toExcelDateSerial(g('acFirstContact')) ?? g('acFirstContact'));
+    setVal('last_contact_date', toExcelDateSerial(g('acLastContact')) ?? g('acLastContact'));
+    const totalC = g('acTotalContacted');
+    if (totalC !== '') setVal('total_contacted', parseFloat(totalC) || 0);
+    setVal('current_supplier', g('acSupplier'));
+    setVal('sales_potential', g('acPotential') || 'Medium');
+    setVal('sales_stage', g('acStage') || 'Lead');
+    const notes = g('acNotes');
+    setVal('notes', notes);
+    setVal('opportunity_summary', notes);
+    const val = parseFloat(g('acValue')) || 0;
+    if (val) setVal('est_value', val);
+    setVal('next_follow_up_date', toExcelDateSerial(g('acFollowUp')) ?? g('acFollowUp'));
     setVal('relationship_level', g('acRelationship') || 'Warm');
+    setVal('sales_owner', g('acOwner') || 'Yosef Getu');
+    setVal('opportunities', g('acOpportunities'));
+    setVal('support_needed', g('acSupport'));
+    if (g('acPlanWhen')) setVal('plan_by_when', formatDateDDMMMYYYY(g('acPlanWhen')));
+    setVal('executed_product', g('acExecProduct'));
+    setVal('executed_uom', g('acExecUom'));
+    const execQty = g('acExecQty');
+    if (execQty !== '') setVal('executed_quantity', parseFloat(execQty) || 0);
+    if (g('acExecDate')) setVal('executed_date', formatDateDDMMMYYYY(g('acExecDate')));
   }
-  setVal('sales_owner', g('acOwner') || 'Yosef Getu');
-  // Top-10 plan fields (Opportunities ≠ Opportunity Summary / Notes)
-  setVal('opportunities', g('acOpportunities'));
-  setVal('support_needed', g('acSupport'));
-  // Display text dates (24-Aug-2026) — reliable on Google Drive / Sheets
-  if (g('acPlanWhen')) setVal('plan_by_when', formatDateDDMMMYYYY(g('acPlanWhen')));
-  // Executed sale (one product line per company on Sales Tracker)
-  setVal('executed_product', g('acExecProduct'));
-  setVal('executed_uom', g('acExecUom'));
-  const execQty = g('acExecQty');
-  if (execQty !== '') setVal('executed_quantity', parseFloat(execQty) || 0);
-  if (g('acExecDate')) setVal('executed_date', formatDateDDMMMYYYY(g('acExecDate')));
 
   // Robust duplicate guard
   const nameKey = canonMap['name'] || 'company' || 'name';
@@ -3380,7 +3475,8 @@ function saveCompany() {
   });
 
   closeModal('modalAddCompany');
-  ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp','acOpportunities','acSupport','acPlanWhen','acExecProduct','acExecUom','acExecQty','acExecDate'].forEach(id => {
+  ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp','acOpportunities','acSupport','acPlanWhen','acExecProduct','acExecUom','acExecQty','acExecDate',
+   'acMName','acMBrand','acMLocation','acMIndustry','acMValue','acMProb','acMLastVisit','acMNextAction','acMContact','acMPhone','acMAppType','acMTechM1','acMMach1','acMModel','acMMfgYear','acMProdLines','acMLineSpeed','acMNotes'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
 
