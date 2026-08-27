@@ -596,7 +596,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-25-rank-open-only';
+const SBA_APP_VERSION = 'sba25-2026-08-27-rank-unique';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 let companyFilter = 'all';
 let editingCompanyIndex = -1;
@@ -3615,10 +3615,12 @@ function builtInFormulaForKey(key, rowNum) {
     return "IF(A" + r + '="","",IF(J' + r + '="Won","Closed - Won",IF(J' + r + '="Lost","Closed - Lost",IF(J' + r + '="No Opportunity","Closed - No Opportunity",IF(AND(Q' + r + '<>"",Q' + r + '<TODAY()),"Overdue",IF(J' + r + '="Proposal Sent","Proposal Outstanding",IF(OR(J' + r + '="Technical Discussion",J' + r + '="Demo / Sample"),"Technical Discussion",IF(OR(J' + r + '="Waiting Customer Decision",J' + r + '="Negotiation"),"Waiting Customer","Needs Follow-up"))))))))';
   }
   if (k === 'rank_helper' || k === 'rank') {
-    // Rank only OPEN deals (exclude Won / Lost / No Opportunity) so Excel Dashboard Top 10
-    // never treats closed wins as opportunities. Dense rank among open by Priority Score (N).
+    // Rank only OPEN deals (exclude Won / Lost / No Opportunity).
+    // Unique ranks 1,2,3… with no gaps: higher score (N) first; same score → earlier row wins.
+    // Dashboard Top 10 uses MATCH(1)…MATCH(10); tied scores previously left rank 10 empty.
     return 'IF(OR(A' + r + '="",OR(J' + r + '="Won",J' + r + '="Lost",J' + r + '="No Opportunity")),"",' +
-      'SUMPRODUCT(($A$2:$A$500<>"")*($J$2:$J$500<>"Won")*($J$2:$J$500<>"Lost")*($J$2:$J$500<>"No Opportunity")*($N$2:$N$500>N' + r + '))+1)';
+      '1+SUMPRODUCT(($A$2:$A$500<>"")*($J$2:$J$500<>"Won")*($J$2:$J$500<>"Lost")*($J$2:$J$500<>"No Opportunity")*($N$2:$N$500>N' + r + '))+' +
+      'SUMPRODUCT(($A$2:$A$500<>"")*($J$2:$J$500<>"Won")*($J$2:$J$500<>"Lost")*($J$2:$J$500<>"No Opportunity")*($N$2:$N$500=N' + r + ')*(ROW($A$2:$A$500)<ROW(A' + r + '))))';
   }
   return null;
 }
