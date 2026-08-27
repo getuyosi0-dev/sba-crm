@@ -591,17 +591,53 @@ body { padding-bottom: 80px; }
         <div class="form-group"><label class="form-label">Phone</label><input type="text" class="form-input" id="acMPhone"></div>
         <div class="form-group"><label class="form-label">Application Type</label><input type="text" class="form-input" id="acMAppType" list="acMAppList" placeholder="Date Coding"></div>
         <datalist id="acMAppList"><option>Date Coding</option><option>Batch Coding</option><option>Serial Coding</option><option>Barcode</option><option>QR Code</option></datalist>
-        <div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Technology &amp; machines (slot 1)</div>
+<div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Technologies (1–4) — # Technologies is formula</div>
         <div class="form-group">
           <label class="form-label">Technology 1</label>
           <select class="form-select" id="acMTech1"><option value=""></option><option>Laser</option><option>CIJ</option><option>TTO</option><option>TIJ</option><option>Valve Jet</option><option>UV</option><option>Fiber</option><option>Other</option></select>
         </div>
         <div class="form-group"><label class="form-label">Tech Machines 1</label><input type="number" class="form-input" id="acMTechM1" min="0"></div>
         <div class="form-group">
+          <label class="form-label">Technology 2</label>
+          <select class="form-select" id="acMTech2"><option value=""></option><option>Laser</option><option>CIJ</option><option>TTO</option><option>TIJ</option><option>Valve Jet</option><option>UV</option><option>Fiber</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Tech Machines 2</label><input type="number" class="form-input" id="acMTechM2" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Technology 3</label>
+          <select class="form-select" id="acMTech3"><option value=""></option><option>Laser</option><option>CIJ</option><option>TTO</option><option>TIJ</option><option>Valve Jet</option><option>UV</option><option>Fiber</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Tech Machines 3</label><input type="number" class="form-input" id="acMTechM3" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Technology 4</label>
+          <select class="form-select" id="acMTech4"><option value=""></option><option>Laser</option><option>CIJ</option><option>TTO</option><option>TIJ</option><option>Valve Jet</option><option>UV</option><option>Fiber</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Tech Machines 4</label><input type="number" class="form-input" id="acMTechM4" min="0"></div>
+<div style="margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">Machine brands (1–5) — # Brands / # Machines are formulas</div>
+        <div class="form-group">
           <label class="form-label">Machine Brand 1</label>
           <select class="form-select" id="acMBrand1"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
         </div>
         <div class="form-group"><label class="form-label">Machines 1</label><input type="number" class="form-input" id="acMMach1" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Machine Brand 2</label>
+          <select class="form-select" id="acMBrand2"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Machines 2</label><input type="number" class="form-input" id="acMMach2" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Machine Brand 3</label>
+          <select class="form-select" id="acMBrand3"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Machines 3</label><input type="number" class="form-input" id="acMMach3" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Machine Brand 4</label>
+          <select class="form-select" id="acMBrand4"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Machines 4</label><input type="number" class="form-input" id="acMMach4" min="0"></div>
+        <div class="form-group">
+          <label class="form-label">Machine Brand 5</label>
+          <select class="form-select" id="acMBrand5"><option value=""></option><option>Markem-Imaje</option><option>Domino</option><option>Videojet</option><option>Chinese Brand</option><option>Linx</option><option>Leibinger</option><option>Hitachi</option><option>Unknown</option><option>Other</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Machines 5</label><input type="number" class="form-input" id="acMMach5" min="0"></div>
         <div class="form-group"><label class="form-label">Model</label><input type="text" class="form-input" id="acMModel"></div>
         <div class="form-group"><label class="form-label">Mfg Year</label><input type="text" class="form-input" id="acMMfgYear"></div>
         <div class="form-group"><label class="form-label">Prod Lines</label><input type="text" class="form-input" id="acMProdLines"></div>
@@ -669,7 +705,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-master-add-form';
+const SBA_APP_VERSION = 'sba25-2026-08-27-master-tech-slots';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -698,11 +734,16 @@ function saveWorkbookMode(mode) {
   } catch (e) {}
 }
 function isFormulaOnlyField(key) {
-  const k = String(key || '').toLowerCase();
+  const k = String(key || '').toLowerCase().replace(/\s+/g, '_');
   if (isMasterMode()) {
-    // Master Data: Exp Revenue + auto counts are formulas; Priority/Probability are inputs
-    return k === 'exp_revenue' || k === 'number_of_brands' || k === 'number_of_machines' ||
-      k === 'number_of_technologies' || k === 'days_since_last_visit';
+    // Master Data formulas (SBA Workbook):
+    //   Col A =ROW()-3 | # Tech =COUNTA | # Brands =COUNTA | # Machines =SUM | Exp.Rev = Value*Prob
+    // Inputs: Opp Status, Stage, Priority, Probability, Last Visit, Next Action, tech/brand slots, etc.
+    return k === 'exp_revenue' || k === 'expected_revenue' || k === 'exp_rev' ||
+      k === 'number_of_brands' || k === 'num_brands' || k === 'brand_count' ||
+      k === 'number_of_machines' || k === 'num_machines' || k === 'machine_count' ||
+      k === 'number_of_technologies' || k === 'num_technologies' || k === 'tech_count' ||
+      k === 'days_since_last_visit' || k === 'row' || k === 'row_num' || k === 'id' || k === '#';
   }
   return typeof FORMULA_ONLY_FIELDS !== 'undefined' && FORMULA_ONLY_FIELDS.has(k);
 }
@@ -763,9 +804,23 @@ const FIELD_ALIASES = {
   brand_name: ['brand_name', 'brand', 'brandname', 'product_brand'],
   model: ['model', 'machine_model', 'printer_model'],
   technology_1: ['technology_1', 'technology1', 'tech_1', 'technology'],
+  technology_2: ['technology_2', 'technology2', 'tech_2'],
+  technology_3: ['technology_3', 'technology3', 'tech_3'],
+  technology_4: ['technology_4', 'technology4', 'tech_4'],
   tech_machines_1: ['tech_machines_1', 'tech_machines1', 'tech_machine_1', 'machines_tech_1'],
+  tech_machines_2: ['tech_machines_2', 'tech_machines2', 'tech_machine_2'],
+  tech_machines_3: ['tech_machines_3', 'tech_machines3', 'tech_machine_3'],
+  tech_machines_4: ['tech_machines_4', 'tech_machines4', 'tech_machine_4'],
   machine_brand_1: ['machine_brand_1', 'machine_brand1', 'machine_brand', 'brand_machine_1'],
+  machine_brand_2: ['machine_brand_2', 'machine_brand2', 'brand_machine_2'],
+  machine_brand_3: ['machine_brand_3', 'machine_brand3', 'brand_machine_3'],
+  machine_brand_4: ['machine_brand_4', 'machine_brand4', 'brand_machine_4'],
+  machine_brand_5: ['machine_brand_5', 'machine_brand5', 'brand_machine_5'],
   machines_1: ['machines_1', 'machines1', 'machine_count_1'],
+  machines_2: ['machines_2', 'machines2', 'machine_count_2'],
+  machines_3: ['machines_3', 'machines3', 'machine_count_3'],
+  machines_4: ['machines_4', 'machines4', 'machine_count_4'],
+  machines_5: ['machines_5', 'machines5', 'machine_count_5'],
   mfg_year: ['mfg_year', 'mfg_year_', 'year', 'manufacture_year', 'manufacturing_year'],
   prod_lines: ['prod_lines', 'prod_lines_', 'production_lines', 'lines'],
   line_speed: ['line_speed', 'line_speed_u_hour', 'speed', 'line_speed_u_hour_'],
@@ -2978,7 +3033,28 @@ function editCompany(rowIndex, sheetName) {
     {key:'phone',label:'Phone',type:'text'},
     {key:'notes',label:'Notes',type:'textarea'},
     {key:'application_type',label:'Application Type',type:'text'},
+    {key:'technology_1',label:'Technology 1',type:'select',options:['','Laser','CIJ','TTO','TIJ','Valve Jet','UV','Fiber','Other']},
+    {key:'tech_machines_1',label:'Tech Machines 1',type:'number'},
+    {key:'technology_2',label:'Technology 2',type:'select',options:['','Laser','CIJ','TTO','TIJ','Valve Jet','UV','Fiber','Other']},
+    {key:'tech_machines_2',label:'Tech Machines 2',type:'number'},
+    {key:'technology_3',label:'Technology 3',type:'select',options:['','Laser','CIJ','TTO','TIJ','Valve Jet','UV','Fiber','Other']},
+    {key:'tech_machines_3',label:'Tech Machines 3',type:'number'},
+    {key:'technology_4',label:'Technology 4',type:'select',options:['','Laser','CIJ','TTO','TIJ','Valve Jet','UV','Fiber','Other']},
+    {key:'tech_machines_4',label:'Tech Machines 4',type:'number'},
+    {key:'machine_brand_1',label:'Machine Brand 1',type:'select',options:['','Markem-Imaje','Domino','Videojet','Chinese Brand','Linx','Leibinger','Hitachi','Unknown','Other']},
+    {key:'machines_1',label:'Machines 1',type:'number'},
+    {key:'machine_brand_2',label:'Machine Brand 2',type:'select',options:['','Markem-Imaje','Domino','Videojet','Chinese Brand','Linx','Leibinger','Hitachi','Unknown','Other']},
+    {key:'machines_2',label:'Machines 2',type:'number'},
+    {key:'machine_brand_3',label:'Machine Brand 3',type:'select',options:['','Markem-Imaje','Domino','Videojet','Chinese Brand','Linx','Leibinger','Hitachi','Unknown','Other']},
+    {key:'machines_3',label:'Machines 3',type:'number'},
+    {key:'machine_brand_4',label:'Machine Brand 4',type:'select',options:['','Markem-Imaje','Domino','Videojet','Chinese Brand','Linx','Leibinger','Hitachi','Unknown','Other']},
+    {key:'machines_4',label:'Machines 4',type:'number'},
+    {key:'machine_brand_5',label:'Machine Brand 5',type:'select',options:['','Markem-Imaje','Domino','Videojet','Chinese Brand','Linx','Leibinger','Hitachi','Unknown','Other']},
+    {key:'machines_5',label:'Machines 5',type:'number'},
     {key:'model',label:'Model',type:'text'},
+    {key:'mfg_year',label:'Mfg Year',type:'text'},
+    {key:'prod_lines',label:'Prod Lines',type:'text'},
+    {key:'line_speed',label:'Line Speed',type:'text'},
   ] : [
     {key:'name',label:'Company Name',type:'text'},
     {key:'industry',label:'Industry',type:'select',options:['Water Bottling','Beverage - Brewing','Beverage - Wine','Beverage - Alcohol','Beverage - Juice','Soft Drink','Food Processing','Dairy','Pharmaceutical','Cosmetics','Soap Manufacturing','Edible Oil','Paint Manufacturing','Chemicals Manufacturing','Plastic Pipe Manufacturing','Cable Manufacturing','Coffee Processing/Trading','Tobacco','Manufacturing','Agriculture/Livestock']},
@@ -3092,7 +3168,10 @@ function saveCompanyEdit() {
   const row = data[editingCompanyIndex];
   // Editable inputs only — never push formula-driven fields
   const fields = isMasterMode()
-    ? ['name','brand_name','location','industry','opp_status','sales_stage','priority','est_value','probability','last_contact_date','next_action','contact_person','phone','notes','application_type','model']
+    ? ['name','brand_name','location','industry','opp_status','sales_stage','priority','est_value','probability','last_contact_date','next_action','contact_person','phone','notes','application_type',
+       'technology_1','tech_machines_1','technology_2','tech_machines_2','technology_3','tech_machines_3','technology_4','tech_machines_4',
+       'machine_brand_1','machines_1','machine_brand_2','machines_2','machine_brand_3','machines_3','machine_brand_4','machines_4','machine_brand_5','machines_5',
+       'model','mfg_year','prod_lines','line_speed']
     : ['name','industry','contact_person','first_contact_date','last_contact_date','total_contacted','current_supplier','sales_potential','sales_stage','notes','est_value','next_follow_up_date','relationship_level','sales_owner','opportunities','support_needed','plan_by_when','executed_product','executed_uom','executed_quantity','executed_date'];
   fields.forEach(f => {
     const el = document.getElementById('edit_' + f);
@@ -3353,10 +3432,14 @@ function saveCompany() {
     setVal('contact_person', g('acMContact'));
     setVal('phone', g('acMPhone'));
     setVal('application_type', g('acMAppType'));
-    setVal('technology_1', g('acMTech1'));
-    if (g('acMTechM1') !== '') setVal('tech_machines_1', parseFloat(g('acMTechM1')) || 0);
-    setVal('machine_brand_1', g('acMBrand1'));
-    if (g('acMMach1') !== '') setVal('machines_1', parseFloat(g('acMMach1')) || 0);
+    for (let ti = 1; ti <= 4; ti++) {
+      setVal('technology_' + ti, g('acMTech' + ti));
+      if (g('acMTechM' + ti) !== '') setVal('tech_machines_' + ti, parseFloat(g('acMTechM' + ti)) || 0);
+    }
+    for (let bi = 1; bi <= 5; bi++) {
+      setVal('machine_brand_' + bi, g('acMBrand' + bi));
+      if (g('acMMach' + bi) !== '') setVal('machines_' + bi, parseFloat(g('acMMach' + bi)) || 0);
+    }
     setVal('model', g('acMModel'));
     setVal('mfg_year', g('acMMfgYear'));
     setVal('prod_lines', g('acMProdLines'));
@@ -3476,7 +3559,7 @@ function saveCompany() {
 
   closeModal('modalAddCompany');
   ['acName','acIndustry','acContact','acFirstContact','acLastContact','acTotalContacted','acSupplier','acNotes','acValue','acFollowUp','acOpportunities','acSupport','acPlanWhen','acExecProduct','acExecUom','acExecQty','acExecDate',
-   'acMName','acMBrand','acMLocation','acMIndustry','acMValue','acMProb','acMLastVisit','acMNextAction','acMContact','acMPhone','acMAppType','acMTechM1','acMMach1','acMModel','acMMfgYear','acMProdLines','acMLineSpeed','acMNotes'].forEach(id => {
+   'acMName','acMBrand','acMLocation','acMIndustry','acMValue','acMProb','acMLastVisit','acMNextAction','acMContact','acMPhone','acMAppType','acMTech1','acMTechM1','acMTech2','acMTechM2','acMTech3','acMTechM3','acMTech4','acMTechM4','acMBrand1','acMMach1','acMBrand2','acMMach2','acMBrand3','acMMach3','acMBrand4','acMMach4','acMBrand5','acMMach5','acMModel','acMMfgYear','acMProdLines','acMLineSpeed','acMNotes'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
 
