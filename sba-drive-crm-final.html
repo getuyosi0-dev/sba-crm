@@ -43,7 +43,7 @@ body { padding-bottom: 80px; }
 .drive-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
 .drive-status.disconnected .drive-dot { background: var(--danger); }
 .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 8px 0 calc(8px + var(--safe-bottom)); z-index: 100; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
-.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 4px; color: var(--text-light); font-size: 11px; cursor: pointer; transition: all 0.2s; border: none; background: none; }
+.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; color: var(--text-light); font-size: 10px; cursor: pointer; transition: all 0.2s; border: none; background: none; min-width: 0; }
 .nav-item.active { color: var(--primary); }
 .nav-item svg { width: 24px; height: 24px; }
 .screen { display: none; padding: 16px; max-width: 900px; margin: 0 auto; animation: fadeIn 0.25s ease; }
@@ -223,10 +223,13 @@ body { padding-bottom: 80px; }
 
 <!-- Mobile Header -->
 <header class="app-header mobile-only">
-  <h1 id="pageTitle">Dashboard</h1>
-  <span id="workbookModeBadge" style="display:none;font-size:11px;font-weight:600;color:var(--primary);background:#e8f1fa;padding:4px 10px;border-radius:12px;margin-left:8px;vertical-align:middle;"></span>
-  <button type="button" class="edit-btn" style="margin-left:6px;" onclick="openModeModal()" title="Switch workbook mode">Mode</button>
-  <div class="drive-status disconnected" id="mobileDriveStatus">
+  <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0;">
+    <h1 id="pageTitle" style="margin:0;font-size:17px;white-space:nowrap;">Dashboard</h1>
+    <span id="workbookModeBadge" style="display:none;font-size:10px;font-weight:700;color:#0f4c81;background:#fff;padding:3px 8px;border-radius:10px;flex-shrink:0;"></span>
+  </div>
+  <button type="button" id="mobileModeBtn" onclick="openModeModal()" title="Switch workbook mode"
+    style="flex-shrink:0;margin:0 8px;padding:8px 14px;font-size:13px;font-weight:700;border-radius:10px;border:none;background:#fff;color:#0f4c81;box-shadow:0 1px 4px rgba(0,0,0,0.2);cursor:pointer;">Mode</button>
+  <div class="drive-status disconnected" id="mobileDriveStatus" style="flex-shrink:0;">
     <span class="drive-dot"></span><span id="mobileDriveStatusText">Disconnected</span>
   </div>
 </header>
@@ -326,9 +329,9 @@ body { padding-bottom: 80px; }
     <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">From Sales Tracker columns: Executed Product, UOM, Quantity, Date. Filter by period.</p>
     <div class="filter-bar" id="execPeriodBar" style="margin-bottom:10px;">
       <button type="button" class="filter-chip active" data-exec-period="month" onclick="setExecPeriod('month')">This month</button>
-      <button type="button" class="filter-chip" data-exec-period="3m" onclick="setExecPeriod('3m')">3 months</button>
-      <button type="button" class="filter-chip" data-exec-period="6m" onclick="setExecPeriod('6m')">6 months</button>
-      <button type="button" class="filter-chip" data-exec-period="year" onclick="setExecPeriod('year')">This year</button>
+      <button type="button" class="filter-chip" data-exec-period="3m" onclick="setExecPeriod('3m')">This quarter</button>
+      <button type="button" class="filter-chip" data-exec-period="6m" onclick="setExecPeriod('6m')">This half-year</button>
+      <button type="button" class="filter-chip" data-exec-period="year" onclick="setExecPeriod('year')">This calendar year</button>
       <button type="button" class="filter-chip" data-exec-period="all" onclick="setExecPeriod('all')">All</button>
     </div>
     <div id="executedPeriodMeta" style="font-size:12px;color:var(--text-light);margin-bottom:8px;"></div>
@@ -355,13 +358,13 @@ body { padding-bottom: 80px; }
     </div>
     <div class="filter-bar" id="pptPeriodBar" style="margin-bottom:10px;">
       <button type="button" class="filter-chip active" data-ppt-period="month" onclick="setPptPeriod('month')">This month</button>
-      <button type="button" class="filter-chip" data-ppt-period="3m" onclick="setPptPeriod('3m')">3 months</button>
-      <button type="button" class="filter-chip" data-ppt-period="6m" onclick="setPptPeriod('6m')">6 months</button>
-      <button type="button" class="filter-chip" data-ppt-period="year" onclick="setPptPeriod('year')">This year</button>
+      <button type="button" class="filter-chip" data-ppt-period="3m" onclick="setPptPeriod('3m')">This quarter</button>
+      <button type="button" class="filter-chip" data-ppt-period="6m" onclick="setPptPeriod('6m')">This half-year</button>
+      <button type="button" class="filter-chip" data-ppt-period="year" onclick="setPptPeriod('year')">This calendar year</button>
     </div>
     <div style="margin:14px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">SWOT analysis</div>
     <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">
-      Auto-draft from Sales Tracker for the selected period. Edit if needed, or <strong>Copy AI prompt</strong> and paste into Grok/ChatGPT/Claude, then paste the improved text back into the boxes.
+      Auto-draft from Sales Tracker for the selected period. Edit if needed.
     </p>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
       <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="refreshAutoSwot()">Generate / Refresh SWOT draft</button>
@@ -439,7 +442,7 @@ body { padding-bottom: 80px; }
 <div class="screen" id="screen-sheets">
   <div class="card">
     <div class="card-title">Excel Sheets</div>
-    <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">View and edit raw Excel data. Changes sync back to your Drive file.</p>
+    <p style="font-size:13px;color:var(--text-light);margin-bottom:12px;">View Excel sheets. <strong>Dashboard</strong> formulas are not recalculated in the browser — open that tab for a live summary computed from Master Data / Sales Tracker. For the Excel Dashboard to update on Drive, open the file once in Excel or Google Sheets.</p>
     <div class="sheet-tabs" id="sheetTabs"></div>
     <div id="sheetContent"></div>
   </div>
@@ -488,6 +491,9 @@ body { padding-bottom: 80px; }
   </button>
   <button class="nav-item" onclick="navigate('companies')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Companies
+  </button>
+  <button class="nav-item" id="navWeeklyBtn" onclick="navigate('weekly')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Weekly
   </button>
   <button class="nav-item" onclick="navigate('sheets')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
@@ -709,7 +715,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-27-mode-switch-fix';
+const SBA_APP_VERSION = 'sba25-2026-08-28-ppt-top10-calendar';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -786,10 +792,11 @@ function applyModeUI() {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   });
-  // Weekly nav: hide in master mode
-  document.querySelectorAll('.nav-link, .nav-item, .qa-btn').forEach(function(el) {
+  // Weekly: available in Sales Tracker mode; hide only in Master Data mode
+  document.querySelectorAll('.nav-link, .nav-item, .qa-btn, #navWeeklyBtn').forEach(function(el) {
     const oc = el.getAttribute('onclick') || '';
-    if (oc.indexOf("weekly") !== -1) {
+    const id = el.id || '';
+    if (oc.indexOf("weekly") !== -1 || id === 'navWeeklyBtn') {
       el.style.display = master ? 'none' : '';
     }
   });
@@ -1769,30 +1776,45 @@ async function fixExcelOpenDealRanking() {
 function getExecPeriodRange(mode, refDate) {
   const ref = refDate || new Date();
   const y = ref.getFullYear();
-  const m = ref.getMonth();
+  const m = ref.getMonth(); // 0–11
   const startOfDay = function(dt) {
     return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 0, 0, 0, 0);
   };
   const endOfDay = function(dt) {
     return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 23, 59, 59, 999);
   };
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   mode = mode || execPeriodMode || 'month';
   if (mode === 'all') return { start: null, end: null, label: 'All time' };
+  // Calendar month (current month of the year)
   if (mode === 'month') {
     const start = new Date(y, m, 1);
     const end = endOfDay(new Date(y, m + 1, 0));
     return { start: start, end: end, label: start.toLocaleString(undefined, { month: 'long', year: 'numeric' }) };
   }
+  // Calendar year (e.g. 2026), not trailing 12 months
   if (mode === 'year') {
     const start = new Date(y, 0, 1);
     const end = endOfDay(new Date(y, 11, 31));
     return { start: start, end: end, label: String(y) };
   }
-  if (mode === '3m' || mode === '6m') {
-    const months = mode === '3m' ? 3 : 6;
-    const end = endOfDay(ref);
-    const start = startOfDay(new Date(y, m - (months - 1), 1));
-    return { start: start, end: end, label: 'Last ' + months + ' months (from ' + start.toLocaleDateString() + ')' };
+  // Calendar quarter: Jan–Mar, Apr–Jun, Jul–Sep, Oct–Dec (current quarter of the year)
+  if (mode === '3m') {
+    const q = Math.floor(m / 3); // 0..3
+    const startM = q * 3;
+    const start = new Date(y, startM, 1);
+    const end = endOfDay(new Date(y, startM + 3, 0));
+    const label = 'Q' + (q + 1) + ' ' + y + ' (' + monthNames[startM] + '–' + monthNames[startM + 2] + ')';
+    return { start: start, end: end, label: label, quarter: q + 1 };
+  }
+  // Calendar half-year: H1 Jan–Jun, H2 Jul–Dec
+  if (mode === '6m') {
+    const h = m < 6 ? 0 : 1;
+    const startM = h * 6;
+    const start = new Date(y, startM, 1);
+    const end = endOfDay(new Date(y, startM + 6, 0));
+    const label = (h === 0 ? 'H1' : 'H2') + ' ' + y + ' (' + monthNames[startM] + '–' + monthNames[startM + 5] + ')';
+    return { start: start, end: end, label: label, half: h + 1 };
   }
   return getExecPeriodRange('month', ref);
 }
@@ -2292,11 +2314,11 @@ function buildPptPlaceholderMap(periodMode) {
     period = String((range.start || new Date()).getFullYear());
     periodShort = period;
   } else if ((periodMode || pptPeriodMode) === '3m') {
-    period = 'Last 3 months';
-    periodShort = '3M';
+    period = range.label || 'Current quarter';
+    periodShort = range.quarter ? ('Q' + range.quarter + ' ' + (range.start && range.start.getFullYear())) : 'Q';
   } else if ((periodMode || pptPeriodMode) === '6m') {
-    period = 'Last 6 months';
-    periodShort = '6M';
+    period = range.label || 'Current half-year';
+    periodShort = range.half ? ('H' + range.half + ' ' + (range.start && range.start.getFullYear())) : 'H';
   }
 
   const map = {
@@ -2333,7 +2355,24 @@ function buildPptPlaceholderMap(periodMode) {
 
   for (let i = 1; i <= 10; i++) {
     const item = top10[i - 1];
-    map['TOP_' + i + '_COMPANY'] = item ? String(item.c.name || '') : '';
+    const c = item ? item.c : null;
+    map['TOP_' + i + '_COMPANY'] = c ? String(c.name || '') : '';
+    map['TOP_' + i + '_STAGE'] = c ? String(c.sales_stage || '') : '';
+    map['TOP_' + i + '_SCORE'] = item ? String(item.score != null ? item.score : '') : '';
+    map['TOP_' + i + '_PRIORITY'] = c ? String(companyPriorityLabel(c) || c.priority || '') : '';
+    // Top-10 plan columns on Sales Tracker
+    map['TOP_' + i + '_OPP'] = c ? String(c.opportunities || '').slice(0, 120) : '';
+    map['TOP_' + i + '_SUPPORT'] = c ? String(c.support_needed || '').slice(0, 120) : '';
+    map['TOP_' + i + '_BY_WHOM'] = c ? String(c.sales_owner || owner || '') : '';
+    let when = c ? (c.plan_by_when != null ? c.plan_by_when : '') : '';
+    if (when !== '' && when != null && typeof formatDateDDMMMYYYY === 'function') {
+      const formatted = formatDateDDMMMYYYY(when);
+      if (formatted) when = formatted;
+      else when = String(when);
+    } else {
+      when = when !== '' && when != null ? String(when) : '';
+    }
+    map['TOP_' + i + '_BY_WHEN'] = when;
   }
   for (let i = 1; i <= 4; i++) {
     const r = execRows[i - 1];
@@ -5837,6 +5876,63 @@ async function applyWeeklyReportToZip(zip, edit) {
 }
 
 
+function buildLiveDashboardPreviewHtml() {
+  try {
+    const companies = getCompaniesFromWorkbook().filter(function(c) {
+      return c.name && String(c.name).trim()
+        && !/^(legend|notes?)$/i.test(String(c.name).trim())
+        && String(c.name).indexOf('——') !== 0;
+    });
+    const total = companies.length;
+    const active = companies.filter(function(c) { return !isClosedStage(c.sales_stage); }).length;
+    const closedWon = companies.filter(function(c) {
+      const s = String(c.sales_stage || '').toLowerCase();
+      return s === 'won' || s === 'closed won';
+    }).length;
+    const closedLost = companies.filter(function(c) {
+      const s = String(c.sales_stage || '').toLowerCase();
+      return s === 'lost' || s === 'closed lost';
+    }).length;
+    const hot = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'hot'; }).length;
+    const warm = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'warm'; }).length;
+    const cold = companies.filter(function(c) { return String(c.opp_status || '').toLowerCase() === 'cold'; }).length;
+    const high = companies.filter(function(c) {
+      const p = String(c.priority || companyPriorityLabel(c) || '').toLowerCase();
+      return p === 'high' || p === 'critical';
+    }).length;
+    const stageCounts = {};
+    companies.forEach(function(c) {
+      const st = String(c.sales_stage || '').trim() || '(blank)';
+      stageCounts[st] = (stageCounts[st] || 0) + 1;
+    });
+    const stageRows = Object.keys(stageCounts).sort().map(function(st) {
+      return '<tr><td style="padding:6px 10px;border-bottom:1px solid var(--border);">' + escapeHtml(st) +
+        '</td><td style="padding:6px 10px;border-bottom:1px solid var(--border);font-weight:600;">' + stageCounts[st] + '</td></tr>';
+    }).join('');
+    let html = '<div style="margin-bottom:14px;padding:12px;background:#f0f7ff;border:1px solid #c5daf0;border-radius:10px;">';
+    html += '<div style="font-size:13px;font-weight:700;color:var(--primary);margin-bottom:6px;">Live dashboard (from data sheet — current)</div>';
+    html += '<p style="font-size:11px;color:var(--text-light);margin:0 0 10px;line-height:1.4;">The Excel <strong>Dashboard</strong> tab below may show old formula results. This box is calculated now from Master Data / Sales Tracker in the app.</p>';
+    html += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px;">';
+    html += '<div style="background:#fff;padding:10px;border-radius:8px;"><div style="font-size:20px;font-weight:700;">' + total + '</div><div style="font-size:11px;color:var(--text-light);">Total companies</div></div>';
+    html += '<div style="background:#fff;padding:10px;border-radius:8px;"><div style="font-size:20px;font-weight:700;">' + active + '</div><div style="font-size:11px;color:var(--text-light);">Active (open)</div></div>';
+    html += '<div style="background:#fff;padding:10px;border-radius:8px;"><div style="font-size:20px;font-weight:700;">' + high + '</div><div style="font-size:11px;color:var(--text-light);">High / Critical priority</div></div>';
+    if (isMasterMode()) {
+      html += '<div style="background:#fff;padding:10px;border-radius:8px;"><div style="font-size:16px;font-weight:700;">' + hot + ' / ' + warm + ' / ' + cold + '</div><div style="font-size:11px;color:var(--text-light);">Hot / Warm / Cold</div></div>';
+    } else {
+      html += '<div style="background:#fff;padding:10px;border-radius:8px;"><div style="font-size:20px;font-weight:700;">' + closedWon + ' / ' + closedLost + '</div><div style="font-size:11px;color:var(--text-light);">Won / Lost</div></div>';
+    }
+    html += '</div>';
+    html += '<div style="font-size:12px;font-weight:600;margin-bottom:4px;">By sales stage</div>';
+    html += '<div style="overflow:auto;max-height:220px;background:#fff;border-radius:8px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr><th style="text-align:left;padding:6px 10px;background:#e8f1fa;">Stage</th><th style="text-align:left;padding:6px 10px;background:#e8f1fa;">Count</th></tr></thead><tbody>' + stageRows + '</tbody></table></div>';
+    html += '<p style="font-size:11px;color:var(--text-light);margin:10px 0 0;">Use the app <strong>Home</strong> dashboard for charts and tools. Open the file in Excel/Sheets to refresh the stored Dashboard formulas on Drive.</p>';
+    html += '</div>';
+    return html;
+  } catch (e) {
+    console.warn('[SBA] live dashboard preview failed', e);
+    return '';
+  }
+}
+
 function renderSheets() {
   if (!workbook) {
     document.getElementById('sheetTabs').innerHTML = '';
@@ -5931,7 +6027,12 @@ function showSheet(index) {
     if (h.indexOf('date') !== -1) dateCols[c] = true;
   }
 
-  let html = '<div style="margin-bottom:8px;font-size:12px;color:var(--text-light);">' +
+  let html = '';
+  if (/dashboard/i.test(sheetName)) {
+    html += buildLiveDashboardPreviewHtml();
+    html += '<div style="margin:8px 0 6px;font-size:12px;font-weight:600;color:var(--text-light);">Excel Dashboard sheet (may be outdated until opened in Excel/Sheets)</div>';
+  }
+  html += '<div style="margin-bottom:8px;font-size:12px;color:var(--text-light);">' +
     escapeHtml(sheetName) + ' — ' + Math.min(maxRows, viewRows.length) + ' rows';
   if (viewRows.length !== data.length) html += ' (filtered from ' + data.length + ' sheet rows)';
   html += ', ' + showCols + ' columns</div>';
