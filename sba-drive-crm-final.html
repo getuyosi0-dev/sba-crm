@@ -79,6 +79,10 @@ body { padding-bottom: 80px; }
 .badge-hot { background: #fde8e8; color: #c0392b; }
 .badge-warm { background: #fff3e0; color: #e67e22; }
 .badge-cold { background: #e3f2fd; color: #1976d2; }
+.badge-critical { background: #fde8e8; color: #c0392b; }
+.badge-high { background: #fff3e0; color: #e67e22; }
+.badge-medium { background: #e8f5e9; color: #2e7d32; }
+.badge-low { background: #eceff1; color: #546e7a; }
 .badge-industry { background: #f3e5f5; color: #7b1fa2; }
 .company-location { font-size: 12px; color: var(--text-light); display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0; margin-bottom: 12px; scrollbar-width: none; }
@@ -415,9 +419,18 @@ body { padding-bottom: 80px; }
   </div>
   <div class="filter-bar">
     <button class="filter-chip active" onclick="setFilter('all')">All</button>
-    <button class="filter-chip" onclick="setFilter('Hot')">Hot</button>
-    <button class="filter-chip" onclick="setFilter('Warm')">Warm</button>
-    <button class="filter-chip" onclick="setFilter('Cold')">Cold</button>
+    <span id="filterMasterChips">
+      <button class="filter-chip" onclick="setFilter('Hot')" id="filterHotBtn">Hot</button>
+      <button class="filter-chip" onclick="setFilter('Warm')" id="filterWarmBtn">Warm</button>
+      <button class="filter-chip" onclick="setFilter('Cold')" id="filterColdBtn">Cold</button>
+    </span>
+    <span id="filterTrackerChips" style="display:none;">
+      <button class="filter-chip" onclick="setFilter('Critical')">Critical</button>
+      <button class="filter-chip" onclick="setFilter('High')">High</button>
+      <button class="filter-chip" onclick="setFilter('Medium')">Medium</button>
+      <button class="filter-chip" onclick="setFilter('Low')">Low</button>
+    </span>
+    <span id="filterTempHint" style="font-size:10px;color:var(--text-light);width:100%;margin-top:4px;"></span>
   </div>
   <div class="company-list" id="companyList"></div>
 </div>
@@ -715,7 +728,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-28-bywhen-fallback';
+const SBA_APP_VERSION = 'sba25-2026-08-28-priority-separate';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -811,7 +824,25 @@ function applyModeUI() {
     modeBadgeD.textContent = label ? ('Mode: ' + label) : '';
     modeBadgeD.style.display = label ? 'inline-block' : 'none';
   }
-  const trackerForm = document.getElementById('addFormTracker');
+  const hint = document.getElementById('filterTempHint');
+  if (hint) {
+    hint.textContent = master
+      ? 'Filters: Opp Status (Hot / Warm / Cold)'
+      : 'Filters: Priority (Critical / High / Medium / Low)';
+  }
+  const mChips = document.getElementById('filterMasterChips');
+  const tChips = document.getElementById('filterTrackerChips');
+  if (mChips) mChips.style.display = master ? '' : 'none';
+  if (tChips) tChips.style.display = master ? 'none' : '';
+  // Reset filter when switching mode so chips match
+  if (typeof companyFilter !== 'undefined' && companyFilter !== 'all') {
+    const allowedMaster = ['hot','warm','cold'];
+    const allowedTracker = ['critical','high','medium','low'];
+    const f = String(companyFilter).toLowerCase();
+    if (master && allowedMaster.indexOf(f) === -1) companyFilter = 'all';
+    if (!master && allowedTracker.indexOf(f) === -1) companyFilter = 'all';
+  }
+    const trackerForm = document.getElementById('addFormTracker');
   const masterForm = document.getElementById('addFormMaster');
   if (trackerForm) trackerForm.style.display = master ? 'none' : '';
   if (masterForm) masterForm.style.display = master ? '' : 'none';
@@ -2498,29 +2529,45 @@ async function generatePptReport() {
 }
 
 function companyTempBucket(c) {
-  // Hot / Warm / Cold for UI badges (not Relationship Level text)
+  // Sales Tracker: Priority Critical/High/Medium/Low → Hot/Warm/Cold filters
+  //   Critical + High → hot | Medium → warm | Low → cold
+  // Master Data: Opp Status Hot/Warm/Cold (unchanged)
+  if (typeof isTrackerMode === 'function' ? isTrackerMode() : (workbookMode !== 'master')) {
+    let p = '';
+    try {
+      p = String(typeof companyPriorityLabel === 'function' ? companyPriorityLabel(c) : (c.priority || '')).toLowerCase();
+    } catch (e) {
+      p = String(c.priority || '').toLowerCase();
+    }
+    if (p === 'critical') return 'critical';
+    if (p === 'high') return 'high';
+    if (p === 'medium') return 'medium';
+    if (p === 'low') return 'low';
+    const score = parseFloat(c.priority_score);
+    if (!isNaN(score)) {
+      if (score >= 65) return 'critical';
+      if (score >= 45) return 'high';
+      if (score >= 25) return 'medium';
+      return 'low';
+    }
+    return 'medium';
+  }
   const s = String(c.opp_status || '').toLowerCase();
   if (s === 'hot') return 'hot';
   if (s === 'warm') return 'warm';
   if (s === 'cold') return 'cold';
   const p = String(c.priority || '').toLowerCase();
-  if (p === 'critical') return 'hot';
-  if (p === 'high' || p === 'medium') return 'warm';
+  if (p === 'critical' || p === 'high') return 'hot';
+  if (p === 'medium') return 'warm';
   if (p === 'low') return 'cold';
-  const score = parseFloat(c.priority_score);
-  if (!isNaN(score)) {
-    if (score >= 65) return 'hot';
-    if (score >= 25) return 'warm';
-    return 'cold';
-  }
-  const r = String(c.relationship_level || '').toLowerCase();
-  if (r.indexOf('good') !== -1) return 'warm';
-  if (r === 'warm') return 'warm';
-  if (r === 'cold') return 'cold';
   return 'warm';
 }
 function tempLabel(bucket) {
   const b = String(bucket || '').toLowerCase();
+  if (b === 'critical') return 'Critical';
+  if (b === 'high') return 'High';
+  if (b === 'medium') return 'Medium';
+  if (b === 'low') return 'Low';
   if (b === 'hot') return 'Hot';
   if (b === 'cold') return 'Cold';
   return 'Warm';
@@ -3051,8 +3098,12 @@ function renderCompanies() {
 
 function setFilter(f) {
   companyFilter = f;
-  document.querySelectorAll('#screen-companies .filter-chip').forEach(b => b.classList.remove('active'));
-  event.target.classList.add('active');
+  document.querySelectorAll('#screen-companies .filter-chip').forEach(function(b) {
+    const oc = b.getAttribute('onclick') || '';
+    const match = oc.match(/setFilter\(['"]([^'"]+)['"]\)/);
+    const val = match ? match[1] : '';
+    b.classList.toggle('active', val === f);
+  });
   renderCompanies();
 }
 
