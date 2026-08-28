@@ -316,7 +316,7 @@ body { padding-bottom: 80px; }
       <span>Top 10 by Priority Score</span>
       <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score (Won / Lost / No Opportunity excluded). Columns: Opportunities, Support Needed, Plan By When.</p>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score (Won / Lost / No Opportunity excluded). Columns: Opportunities, Support Needed, By Whom (Sales Owner), By When (Plan By When, or Next Follow-up if empty).</p>
     <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
   </div>
@@ -715,7 +715,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-28-ppt-top10-calendar';
+const SBA_APP_VERSION = 'sba25-2026-08-28-bywhen-fallback';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -1680,6 +1680,33 @@ function companyPriorityScore(c) {
   return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
 }
 
+
+/** Plan By When first; if empty use Next Follow-up Date (next visit plan). */
+function resolveTop10ByWhen(c) {
+  if (!c) return '';
+  let when = c.plan_by_when;
+  if (when === undefined || when === null || String(when).trim() === '') {
+    when = c.next_follow_up_date;
+  }
+  if (when === undefined || when === null || String(when).trim() === '') return '';
+  if (typeof formatDateDDMMMYYYY === 'function') {
+    const disp = formatDateDDMMMYYYY(when);
+    if (disp) return disp;
+  }
+  // Excel serial number
+  if (typeof when === 'number' && isFinite(when) && when > 20000 && when < 100000) {
+    try {
+      const d = typeof excelSerialToDate === 'function' ? excelSerialToDate(when) : null;
+      if (d && typeof formatDateDDMMMYYYY === 'function') {
+        const disp = formatDateDDMMMYYYY(d);
+        if (disp) return disp;
+      }
+      if (d) return d.toISOString().slice(0, 10);
+    } catch (e) {}
+  }
+  return String(when).trim();
+}
+
 function computeTop10ByPriority(companies) {
   const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
     return c.name && String(c.name).trim()
@@ -1717,13 +1744,7 @@ function renderTop10Table(companies) {
     const opp = c.opportunities || '';
     const support = c.support_needed || '';
     const whom = c.sales_owner || '';
-    let when = c.plan_by_when || c.next_follow_up_date || '';
-    if (when !== '' && when != null) {
-      if (typeof formatDateDDMMMYYYY === 'function') {
-        const disp = formatDateDDMMMYYYY(when);
-        if (disp) when = disp;
-      }
-    } else when = '';
+    const when = resolveTop10ByWhen(c);
     const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
     const bg = i % 2 ? 'background:#f7fafc;' : '';
     html += '<tr style="border-bottom:1px solid var(--border);' + bg + 'cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
@@ -2364,15 +2385,7 @@ function buildPptPlaceholderMap(periodMode) {
     map['TOP_' + i + '_OPP'] = c ? String(c.opportunities || '').slice(0, 120) : '';
     map['TOP_' + i + '_SUPPORT'] = c ? String(c.support_needed || '').slice(0, 120) : '';
     map['TOP_' + i + '_BY_WHOM'] = c ? String(c.sales_owner || owner || '') : '';
-    let when = c ? (c.plan_by_when != null ? c.plan_by_when : '') : '';
-    if (when !== '' && when != null && typeof formatDateDDMMMYYYY === 'function') {
-      const formatted = formatDateDDMMMYYYY(when);
-      if (formatted) when = formatted;
-      else when = String(when);
-    } else {
-      when = when !== '' && when != null ? String(when) : '';
-    }
-    map['TOP_' + i + '_BY_WHEN'] = when;
+    map['TOP_' + i + '_BY_WHEN'] = c ? resolveTop10ByWhen(c) : '';
   }
   for (let i = 1; i <= 4; i++) {
     const r = execRows[i - 1];
