@@ -728,7 +728,7 @@ const AUTO_SAVE_DELAY_MS = 4000; // quiet background save after edits settle
 
 let currentSheet = 0;
 let currentScreen = 'dashboard';
-const SBA_APP_VERSION = 'sba25-2026-08-28-priority-separate';
+const SBA_APP_VERSION = 'sba25-2026-09-02-dates-hybrid';
 console.log('%c[SBA] ' + SBA_APP_VERSION + ' loaded — if you do not see this exact string, the browser is caching an old file', 'color:#0f4c81;font-weight:bold');
 
 /** User-selected workbook mode: 'tracker' | 'master' | null */
@@ -923,7 +923,7 @@ const FIELD_ALIASES = {
 };
 
 // Always store these as Excel text (inlineStr), never as numbers — protects phone numbers, names, etc.
-const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'opportunities', 'current_supplier', 'next_action', 'sales_owner', 'application_type', 'executed_product', 'executed_uom', 'support_needed']);
+const FORCE_TEXT_FIELDS = new Set(['name', 'brand_name', 'industry', 'location', 'opp_status', 'relationship_level', 'sales_stage', 'sales_potential', 'priority', 'contact_person', 'phone', 'notes', 'opportunity_summary', 'opportunities', 'current_supplier', 'next_action', 'sales_owner', 'application_type', 'executed_product', 'executed_uom', 'support_needed', 'first_contact_date', 'last_contact_date', 'next_follow_up_date', 'executed_date', 'plan_by_when', 'last_visit']);
 
 // These columns are Excel formulas — never overwrite with static values from the form
 const FORMULA_ONLY_FIELDS = new Set([
@@ -3299,11 +3299,12 @@ function saveCompanyEdit() {
     const actualKey = canonMap[f] || (headerMap[f] !== undefined ? f : null);
     if (actualKey != null && headerMap[actualKey] !== undefined) {
       let v = el.value;
-      if (f === 'plan_by_when' || f === 'executed_date') {
-        if (v) v = formatDateDDMMMYYYY(v);
-      } else if (f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
-        const serial = toExcelDateSerial(v);
-        if (serial != null) v = serial;
+      if (f === 'plan_by_when' || f === 'executed_date' ||
+          f === 'first_contact_date' || f === 'last_contact_date' || f === 'next_follow_up_date') {
+        if (v) {
+          const serial = toExcelDateSerial(v);
+          if (serial != null) v = serial;
+        }
       }
       if (f === 'executed_quantity' || f === 'est_value' || f === 'total_contacted' || f === 'probability') {
         const n = parseFloat(String(v).replace(/,/g, ''));
@@ -3597,12 +3598,12 @@ function saveCompany() {
     setVal('sales_owner', g('acOwner') || 'Yosef Getu');
     setVal('opportunities', g('acOpportunities'));
     setVal('support_needed', g('acSupport'));
-    if (g('acPlanWhen')) setVal('plan_by_when', formatDateDDMMMYYYY(g('acPlanWhen')));
+    if (g('acPlanWhen')) setVal('plan_by_when', toExcelDateSerial(g('acPlanWhen')) ?? g('acPlanWhen'));
     setVal('executed_product', g('acExecProduct'));
     setVal('executed_uom', g('acExecUom'));
     const execQty = g('acExecQty');
     if (execQty !== '') setVal('executed_quantity', parseFloat(execQty) || 0);
-    if (g('acExecDate')) setVal('executed_date', formatDateDDMMMYYYY(g('acExecDate')));
+    if (g('acExecDate')) setVal('executed_date', toExcelDateSerial(g('acExecDate')) ?? g('acExecDate'));
   }
 
   // Robust duplicate guard
@@ -3750,11 +3751,14 @@ function isNumericLike(val) { return /^-?\d+(\.\d+)?$/.test(String(val).trim());
 // HTML date inputs yield "YYYY-MM-DD" text. Excel date formulas need serial numbers
 // (days since 1899-12-30). Writing text dates breaks Days-Since-Last-Visit etc.
 function isDateFieldKey(key) {
-  const k = String(key || '').toLowerCase();
-  // Explicit Top-10 / executed fields (may not contain the word "date")
-  if (k === 'plan_by_when' || k === 'by_when' || k === 'plan_when') return true;
+  const k = String(key || '').toLowerCase().replace(/\s+/g, '_');
+  // Explicit CRM date fields (with or without the word "date")
+  if (k === 'plan_by_when' || k === 'by_when' || k === 'plan_when' || k === 'target_date' || k === 'deadline') return true;
+  if (k === 'last_visit' || k === 'last_visit_date' || k === 'first_contact' || k === 'last_contact') return true;
+  if (k === 'executed_date' || k === 'exec_date' || k === 'sale_date' || k === 'order_date') return true;
   if (k.indexOf('date') === -1) return false;
   if (k.indexOf('update') !== -1) return false;
+  if (k.indexOf('days_since') !== -1) return false; // calculated, not an input date
   return true;
 }
 
@@ -3856,7 +3860,7 @@ async function ensureDateStyleId(zip) {
 
   zip.file('xl/styles.xml', xml);
   ensureDateStyleId._cached = newIndex;
-  console.log('[SBA] Created date style index', newIndex, 'numFmtId', newFmtId, 'format yyyy-mm-dd');
+  console.log('[SBA] Created date style index', newIndex, 'numFmtId', newFmtId, 'format dd-mmm-yyyy');
   return newIndex;
 }
 function toExcelDateSerial(val) {
@@ -3900,19 +3904,22 @@ function formatDateDDMMMYYYY(val) {
   return utc.getUTCDate() + '-' + months[utc.getUTCMonth()] + '-' + utc.getUTCFullYear();
 }
 
-/** Executed Date / Plan By When — write as text so Drive always shows 24-Aug-2026 */
+/**
+ * ALL CRM date inputs are written as text "30-Dec-2025" (not Excel serials).
+ * Serials (e.g. 46268) show as raw numbers on Google Drive/Sheets when the
+ * column has no date number-format — text always displays correctly.
+ */
+/**
+ * Hybrid dates: never force pure text for formula fields.
+ * Kept for compatibility; always returns false so writes use serial + date style.
+ */
 function isDisplayTextDateField(key) {
-  const k = String(key || '').toLowerCase();
-  return k === 'executed_date' || k === 'exec_date' || k === 'sale_date' || k === 'order_date' ||
-    k === 'plan_by_when' || k === 'by_when' || k === 'plan_when' || k === 'target_date' || k === 'deadline';
+  return false;
 }
 
+/** Coerce CRM date fields to Excel serial numbers (formulas keep working). */
 function coerceValueForExcel(key, val) {
   if (val === '' || val === undefined || val === null) return val;
-  if (isDisplayTextDateField(key)) {
-    const disp = formatDateDDMMMYYYY(val);
-    return disp || val;
-  }
   if (isDateFieldKey(key)) {
     const serial = toExcelDateSerial(val);
     if (serial != null) return serial;
@@ -3932,9 +3939,8 @@ function ssEl(doc, localName) {
 
 // Decide whether a value for a given field key should be written as text.
 function shouldForceText(fieldKey, val) {
-  // Executed Date / Plan By When → human text "24-Aug-2026" (reliable on Drive)
-  if (isDisplayTextDateField(fieldKey)) return true;
-  if (isDateFieldKey(fieldKey)) return false; // first/last/follow-up stay numeric serial
+  // Dates stay numeric serial + dd-mmm-yyyy style (see applyAddRow/applyEditRow)
+  if (isDateFieldKey(fieldKey)) return false;
   if (FORCE_TEXT_FIELDS.has(fieldKey)) return true;
   if (/phone|mobile|tel|name|status|stage|priority|industry|location|contact|note|brand|application/i.test(fieldKey)
       && !isDateFieldKey(fieldKey)) return true;
@@ -4471,7 +4477,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
     newCell.setAttribute('r', colRef);
     let styleId = findColStyle(col);
     // New columns (Executed Date, Plan By When) often have no sample style — apply workbook date format
-    if (styleId == null && isDateFieldKey(key) && dateStyleId != null) styleId = dateStyleId;
+    if (isDateFieldKey(key) && dateStyleId != null) styleId = dateStyleId; // always prefer dd-mmm-yyyy
     if (styleId != null) newCell.setAttribute('s', String(styleId));
 
     // Build formula text: resolve shared formulas, else built-in template for calc columns
@@ -4502,10 +4508,7 @@ function applyAddRow(doc, sheetDataEl, headerColMap, values, tableInfo, preferre
       if (key === 'name' || key === 'company_name' || key === 'company') {
         addedCompanyName = String(val);
       }
-      if (isDisplayTextDateField(key)) {
-        const disp = formatDateDDMMMYYYY(val);
-        if (disp) val = disp;
-      } else if (isDateFieldKey(key)) {
+      if (isDateFieldKey(key)) {
         const serial = toExcelDateSerial(val);
         if (serial != null) val = serial;
       }
@@ -4686,11 +4689,8 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
       return;
     }
     val = coerceValueForExcel(key, val);
-    // Executed Date / Plan By When → "24-Aug-2026" text for Drive display
-    if (isDisplayTextDateField(key)) {
-      const disp = formatDateDDMMMYYYY(val);
-      if (disp) val = disp;
-    } else if (isDateFieldKey(key)) {
+    // Dates: Excel serial (math works). Style dd-mmm-yyyy applied below.
+    if (isDateFieldKey(key)) {
       const serial = toExcelDateSerial(val);
       if (serial != null) val = serial;
     }
@@ -4704,8 +4704,10 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
       cellEl.removeAttribute('t');
     }
     if (isDateFieldKey(key)) {
-      // Prefer a style already used in this column; else fall back to workbook date style
-      if (!cellEl.hasAttribute('s')) {
+      // Always force dd-mmm-yyyy style so Drive/Excel show 30-Dec-2025, not 46268
+      if (dateStyleId != null) {
+        cellEl.setAttribute('s', String(dateStyleId));
+      } else if (!cellEl.hasAttribute('s')) {
         const rows = ssChildren(rowEl.parentNode, 'row');
         for (let i = 0; i < Math.min(rows.length, 40); i++) {
           const sample = ssChildren(rows[i], 'c').find(function(c) {
@@ -4714,9 +4716,6 @@ function applyEditRow(doc, sheetDataEl, headerColMap, rowIndex, values, excelRow
           });
           if (sample) { cellEl.setAttribute('s', sample.getAttribute('s')); break; }
         }
-      }
-      if (!cellEl.hasAttribute('s') && dateStyleId != null) {
-        cellEl.setAttribute('s', String(dateStyleId));
       }
     }
 
