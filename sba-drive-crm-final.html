@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.1 (2026-09-04 date+top10)</title>
+<title>SBA Drive CRM v25.3 (2026-09-04 top10-cached-score)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -713,7 +713,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-04-date-top10 loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-04-top10-cached-score loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1176,11 +1176,26 @@ function pickerCallback(data) {
 // "original workbook is the source of truth" piece of PROBLEM 2.
 function loadFileFromDrive(fileId) {
   showToast('Loading file from Drive...', 'success');
-  driveFetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media')
+  // Native Google Sheets must be exported (includes calculated Priority Score values).
+  // Binary .xlsx uses alt=media.
+  const mime = (currentFile && currentFile.mimeType) || '';
+  const isGoogleSheet = mime.indexOf('google-apps.spreadsheet') !== -1;
+  const url = isGoogleSheet
+    ? ('https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=' + encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'))
+    : ('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media');
+  driveFetch(url)
     .then(async res => {
       if (!res.ok) {
-        const reason = await interpretDriveError(res, 'download');
-        throw new Error(reason);
+        // Fallback: try the other method
+        const altUrl = isGoogleSheet
+          ? ('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media')
+          : ('https://www.googleapis.com/drive/v3/files/' + fileId + '/export?mimeType=' + encodeURIComponent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'));
+        const res2 = await driveFetch(altUrl);
+        if (!res2.ok) {
+          const reason = await interpretDriveError(res, 'download');
+          throw new Error(reason);
+        }
+        return res2.arrayBuffer();
       }
       return res.arrayBuffer();
     })
@@ -1565,7 +1580,8 @@ function scoreHeaderRow(row) {
 // Returns { headerRowIndex (0-based in AOA), headers[], data } for a sheet.
 // Detects title rows so we do not treat "SBA Ethiopia — Master Database..." as headers.
 function getSheetAoaInfo(sheet) {
-  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  // raw:true keeps numeric Priority Score / Probability cached values (not formatted text)
+  const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true, cellDates: false });
   if (!data.length) return { headerRowIndex: 0, headers: [], data, headerScore: 0 };
   let bestIdx = 0;
   let bestScore = -1;
@@ -1620,6 +1636,29 @@ function getCompaniesFromWorkbook() {
       company[normalizeHeader(h)] = row[idx] !== undefined ? row[idx] : '';
     });
     company._headers = headers;
+    enrichCompanyWithCanonicals(company, headers);
+    // Pull cached formula results (Priority Score, Probability, etc.) from SheetJS cell.v
+    // sheet_to_json sometimes omits them when only the formula string is prominent
+    try {
+      const scoreKeys = ['priority_score', 'score'];
+      const probKeys = ['probability', 'probability_'];
+      headers.forEach(function(h, colIdx) {
+        if (!h) return;
+        const nk = normalizeHeader(h);
+        const isScore = scoreKeys.indexOf(nk) !== -1 || nk === 'priority_score';
+        const isProb = nk.indexOf('probability') !== -1;
+        if (!isScore && !isProb) return;
+        const cur = company[nk];
+        if (cur !== undefined && cur !== null && cur !== '' && !isNaN(parseFloat(cur))) return;
+        const addr = XLSX.utils.encode_cell({ r: i, c: colIdx });
+        const cell = targetSheet[addr];
+        if (cell && cell.v != null && cell.v !== '' && !isNaN(parseFloat(cell.v))) {
+          company[nk] = cell.v;
+          if (isScore) company.priority_score = cell.v;
+          if (isProb) company.probability = cell.v;
+        }
+      });
+    } catch (e) {}
     enrichCompanyWithCanonicals(company, headers);
     // Map relationship_level → opp_status for UI badges when no explicit opp_status
     if (!company.opp_status && company.relationship_level) {
@@ -1703,13 +1742,23 @@ function escapeHtml(str) {
 let execPeriodMode = 'month'; // month | 3m | 6m | year | all
 
 function companyPriorityScore(c) {
-  // Always compute live in the browser. Excel priority_score formulas do not recalculate
-  // here, so new/edited rows often have blank or stale sheet scores while Google Sheets is correct.
+  // 1) Prefer Excel/Sheets cached Priority Score when present (matches Google Dashboard Top 10)
+  // 2) Fall back to live compute for brand-new rows that still have blank formula results
+  const sheetScore = parseFloat(c.priority_score);
+  if (!isNaN(sheetScore) && sheetScore > 0) {
+    return sheetScore;
+  }
+  // Live fallback — same structure as Sales Tracker formula / _Lists
   const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
   const potMap = { High: 30, Medium: 10, Low: 3 };
   const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
   const stage = String(c.sales_stage || '').trim();
-  const prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
+  let prob = parseFloat(c.probability);
+  if (isNaN(prob) || prob < 0) {
+    prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
+  }
+  // probability in sheet may be 0.65 or 65
+  if (prob > 1) prob = prob / 100;
   const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
   const val = parseFloat(c.est_value) || 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
@@ -1724,8 +1773,6 @@ function companyPriorityScore(c) {
       else if (fuUTC - todayUTC <= 7 * 86400000) urgency = 3;
     }
   } catch (e) {}
-  // Always return live compute so Top 10 updates immediately after add/edit/reload
-  // (Excel formula cache is often blank or stale until the file is opened in Excel/Sheets)
   return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus + urgency));
 }
 
@@ -1768,7 +1815,10 @@ function computeTop10ByPriority(companies) {
   });
   return list.map(function(c) {
     return { c: c, score: companyPriorityScore(c) };
-  }).sort(function(a, b) { return b.score - a.score; }).slice(0, 10);
+  }).sort(function(a, b) {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+  }).slice(0, 10);
 }
 
 function renderTop10Table(companies) {
@@ -6154,7 +6204,7 @@ function listDriveFiles() {
       const safeName = String(f.name || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const sharedTag = f.shared ? ' · shared' : '';
       const kind = (f.mimeType || '').indexOf('google-apps.spreadsheet') !== -1 ? 'Sheets' : 'Excel';
-      return '<div class="file-card" onclick="selectDriveFile(\'' + f.id + '\', \'' + safeName + '\')">' +
+      return '<div class="file-card" onclick="selectDriveFile(\'' + f.id + '\', \'' + safeName + '\', \'' + String(f.mimeType || '').replace(/'/g, '') + '\')">' +
         '<div class="file-icon">📊</div>' +
         '<div class="file-info"><div class="file-name">' + escapeHtml(f.name || '') + '</div>' +
         '<div class="file-meta">' + new Date(f.modifiedTime).toLocaleDateString() + ' · ' + kind + sharedTag + ' · Tap to open</div></div></div>';
@@ -6166,9 +6216,13 @@ function listDriveFiles() {
   });
 }
 
-function selectDriveFile(id, name) {
+function selectDriveFile(id, name, mimeType) {
   if (!confirmDiscardUnsaved('open another file')) return;
-  currentFile = { id, name, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  currentFile = {
+    id: id,
+    name: name,
+    mimeType: mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  };
   localStorage.setItem('sba_drive_file', JSON.stringify(currentFile));
   loadFileFromDrive(id);
   navigate('dashboard');
