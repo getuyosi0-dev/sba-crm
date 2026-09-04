@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25</title>
+<title>SBA Drive CRM v25.1 (2026-09-04 date+top10)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -713,6 +713,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
+console.log('[SBA] sba25-2026-09-04-date-top10 loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1190,7 +1191,7 @@ function loadFileFromDrive(fileId) {
       const data = new Uint8Array(buf);
       // SheetJS is used ONLY to populate the CRM's display data (lists,
       // search, dashboard counts) from here on — never written back to Drive.
-      workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true, cellDates: true });
+      workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true, cellDates: false });
       showToast('File loaded: ' + currentFile.name, 'success');
       updateFileUI();
       updateDirtyIndicator();
@@ -1202,6 +1203,9 @@ function loadFileFromDrive(fileId) {
         workbookMode = null;
         openModal('modalWorkbookMode');
       }
+      // Always refresh dashboard from the freshly loaded Sales Tracker (not stale UI state)
+      try { renderDashboard(); } catch (e) { console.warn(e); }
+      try { renderCompanies(); } catch (e) { console.warn(e); }
     })
     .catch(err => {
       console.error('Load error:', err);
@@ -1283,7 +1287,7 @@ async function saveToDrive(options) {
     lastSavedAt = new Date();
     // Keep UI in sync with what was actually uploaded
     try {
-      workbook = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellFormula: true, cellStyles: true, cellDates: true });
+      workbook = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellFormula: true, cellStyles: true, cellDates: false });
       renderDashboard();
       renderCompanies();
     } catch (e) { console.warn('[SBA] post-save workbook reload failed', e); }
@@ -1720,11 +1724,9 @@ function companyPriorityScore(c) {
       else if (fuUTC - todayUTC <= 7 * 86400000) urgency = 3;
     }
   } catch (e) {}
-  const computed = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus + urgency));
-  const sheetScore = parseFloat(c.priority_score);
-  // Prefer live compute; use sheet only if it is higher (Excel may have extra bonuses)
-  if (!isNaN(sheetScore) && sheetScore > computed) return sheetScore;
-  return computed;
+  // Always return live compute so Top 10 updates immediately after add/edit/reload
+  // (Excel formula cache is often blank or stale until the file is opened in Excel/Sheets)
+  return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus + urgency));
 }
 
 
@@ -1748,7 +1750,10 @@ function resolveTop10ByWhen(c) {
         const disp = formatDateDDMMMYYYY(d);
         if (disp) return disp;
       }
-      if (d) return d.toISOString().slice(0, 10);
+      if (d) {
+        const p = calendarPartsFromAny(d);
+        if (p) return ymdPad(p.y, p.mo, p.d);
+      }
     } catch (e) {}
   }
   return String(when).trim();
@@ -2649,16 +2654,22 @@ function ymdPad(y, mo, d) {
 /** Extract calendar Y/M/D from Excel serial, Date, or date string without TZ off-by-one. */
 function calendarPartsFromAny(val) {
   if (val === undefined || val === null || val === '') return null;
+  // Excel serial number → pure UTC calendar day (no browser timezone)
   if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) {
     const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
     return { y: utc.getUTCFullYear(), mo: utc.getUTCMonth() + 1, d: utc.getUTCDate() };
   }
   if (val instanceof Date && !isNaN(val.getTime())) {
-    // Excel/SheetJS serials are UTC midnight → use UTC day components
-    if (val.getUTCHours() === 0 && val.getUTCMinutes() === 0 && val.getUTCSeconds() === 0 && val.getUTCMilliseconds() === 0) {
-      return { y: val.getUTCFullYear(), mo: val.getUTCMonth() + 1, d: val.getUTCDate() };
+    // Prefer reconstructing via Excel serial so Date timezone never shifts the day
+    try {
+      const localMidnight = Date.UTC(val.getFullYear(), val.getMonth(), val.getDate());
+      const utcMidnight = Date.UTC(val.getUTCFullYear(), val.getUTCMonth(), val.getUTCDate());
+      // Choose the interpretation closer to an exact day boundary in either system
+      // Always use LOCAL calendar components for Date objects (date inputs / SheetJS local dates)
+      return { y: val.getFullYear(), mo: val.getMonth() + 1, d: val.getDate() };
+    } catch (e) {
+      return { y: val.getFullYear(), mo: val.getMonth() + 1, d: val.getDate() };
     }
-    return { y: val.getFullYear(), mo: val.getMonth() + 1, d: val.getDate() };
   }
   const s = String(val).trim();
   let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
@@ -5016,7 +5027,7 @@ async function validateGeneratedWorkbook(buf, expectations) {
   // Second check: re-open with SheetJS and confirm the company appears in cell data
   if (expectations.addedCompanyNames && expectations.addedCompanyNames.length) {
     try {
-      const reWb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: true });
+      const reWb = XLSX.read(new Uint8Array(buf), { type: 'array', cellDates: false });
       for (const name of expectations.addedCompanyNames) {
         let foundInSheetJS = false;
         for (const sn of reWb.SheetNames) {
@@ -5075,26 +5086,8 @@ async function validateGeneratedWorkbook(buf, expectations) {
 // ==================== SHEETS VIEW ====================
 function formatSheetCell(val) {
   if (val === null || val === undefined || val === '') return '';
-  if (val instanceof Date && !isNaN(val.getTime())) {
-    const y = val.getUTCFullYear ? val.getUTCFullYear() : val.getFullYear();
-    const mo = String((val.getUTCMonth ? val.getUTCMonth() : val.getMonth()) + 1).padStart(2, '0');
-    const d = String(val.getUTCDate ? val.getUTCDate() : val.getDate()).padStart(2, '0');
-    // Prefer local calendar date display for CRM dates
-    const ly = val.getFullYear();
-    const lmo = String(val.getMonth() + 1).padStart(2, '0');
-    const ld = String(val.getDate()).padStart(2, '0');
-    return ly + '-' + lmo + '-' + ld;
-  }
-  // Excel serial (number or numeric string)
-  const num = typeof val === 'number' ? val : (/^\d+(\.\d+)?$/.test(String(val).trim()) ? parseFloat(val) : NaN);
-  if (!isNaN(num) && num > 20000 && num < 100000) {
-    const dt = new Date(Date.UTC(1899, 11, 30) + Math.round(num) * 86400000);
-    const y = dt.getUTCFullYear();
-    const mo = String(dt.getUTCMonth() + 1).padStart(2, '0');
-    const d = String(dt.getUTCDate()).padStart(2, '0');
-    return y + '-' + mo + '-' + d;
-  }
-  // Probabilities stored as 0.05 → show 5% when header context not available — leave raw
+  const parts = calendarPartsFromAny(val);
+  if (parts) return ymdPad(parts.y, parts.mo, parts.d);
   return String(val);
 }
 
@@ -6313,7 +6306,7 @@ async function runWorkbookIntegrityTest() {
 
     // Reload with SheetJS
     try {
-      const re = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellDates: true });
+      const re = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellDates: false });
       const sheet = re.Sheets[targetName] || re.Sheets[re.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
       const foundInSheetJS = rows.some(r => r.some(c => String(c).indexOf('SBA_TEST_') !== -1));
