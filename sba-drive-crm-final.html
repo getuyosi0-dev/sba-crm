@@ -1699,16 +1699,32 @@ function escapeHtml(str) {
 let execPeriodMode = 'month'; // month | 3m | 6m | year | all
 
 function companyPriorityScore(c) {
-  let score = parseFloat(c.priority_score);
-  if (!isNaN(score)) return score;
+  // Always compute live in the browser. Excel priority_score formulas do not recalculate
+  // here, so new/edited rows often have blank or stale sheet scores while Google Sheets is correct.
   const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
   const potMap = { High: 30, Medium: 10, Low: 3 };
   const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
-  const prob = stageProb[c.sales_stage] != null ? stageProb[c.sales_stage] : 0.05;
+  const stage = String(c.sales_stage || '').trim();
+  const prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
   const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
   const val = parseFloat(c.est_value) || 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
-  return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus));
+  let urgency = 0;
+  try {
+    const fu = excelSerialToDate(c.next_follow_up_date);
+    if (fu) {
+      const today = new Date();
+      const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+      const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+      if (fuUTC < todayUTC) urgency = 5;
+      else if (fuUTC - todayUTC <= 7 * 86400000) urgency = 3;
+    }
+  } catch (e) {}
+  const computed = Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus + urgency));
+  const sheetScore = parseFloat(c.priority_score);
+  // Prefer live compute; use sheet only if it is higher (Excel may have extra bonuses)
+  if (!isNaN(sheetScore) && sheetScore > computed) return sheetScore;
+  return computed;
 }
 
 
@@ -2626,17 +2642,47 @@ function monthLabel(key) {
   return months[+parts[1] - 1] + ' ' + parts[0].slice(2);
 }
 
+/** Pad Y-M-D for <input type="date"> — pure calendar day, no timezone shift. */
+function ymdPad(y, mo, d) {
+  return y + '-' + String(mo).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+}
+/** Extract calendar Y/M/D from Excel serial, Date, or date string without TZ off-by-one. */
+function calendarPartsFromAny(val) {
+  if (val === undefined || val === null || val === '') return null;
+  if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) {
+    const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
+    return { y: utc.getUTCFullYear(), mo: utc.getUTCMonth() + 1, d: utc.getUTCDate() };
+  }
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    // Excel/SheetJS serials are UTC midnight → use UTC day components
+    if (val.getUTCHours() === 0 && val.getUTCMinutes() === 0 && val.getUTCSeconds() === 0 && val.getUTCMilliseconds() === 0) {
+      return { y: val.getUTCFullYear(), mo: val.getUTCMonth() + 1, d: val.getUTCDate() };
+    }
+    return { y: val.getFullYear(), mo: val.getMonth() + 1, d: val.getDate() };
+  }
+  const s = String(val).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return { y: +m[1], mo: +m[2], d: +m[3] };
+  m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (m) return { y: +m[3], mo: +m[2], d: +m[1] };
+  m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (m) {
+    const months = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    const mo = months[m[2].toLowerCase()];
+    if (mo) return { y: +m[3], mo: mo, d: +m[1] };
+  }
+  if (/^\d{5}(\.\d+)?$/.test(s)) {
+    const n = parseFloat(s);
+    if (n > 20000 && n < 100000) return calendarPartsFromAny(n);
+  }
+  return null;
+}
 function excelSerialToDate(v) {
   if (v == null || v === '') return null;
-  if (v instanceof Date && !isNaN(v)) return v;
-  if (typeof v === 'number' && v > 20000 && v < 100000) {
-    return new Date(Date.UTC(1899, 11, 30) + v * 86400000);
-  }
-  const s = String(v).trim();
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  const d = new Date(s);
-  return isNaN(d.getTime()) ? null : d;
+  const parts = calendarPartsFromAny(v);
+  if (parts) return new Date(Date.UTC(parts.y, parts.mo - 1, parts.d));
+  if (v instanceof Date && !isNaN(v.getTime())) return v;
+  return null;
 }
 function companyPriorityLabel(c) {
   const p = String(c.priority || '').trim();
@@ -3218,27 +3264,8 @@ function editCompany(rowIndex, sheetName) {
   }
   function toDateInputValue(val) {
     if (val === undefined || val === null || val === '') return '';
-    if (val instanceof Date && !isNaN(val.getTime())) {
-      const y = val.getFullYear();
-      const mo = String(val.getMonth() + 1).padStart(2, '0');
-      const d = String(val.getDate()).padStart(2, '0');
-      return y + '-' + mo + '-' + d;
-    }
-    if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) {
-      const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
-      const y = utc.getUTCFullYear();
-      const mo = String(utc.getUTCMonth() + 1).padStart(2, '0');
-      const d = String(utc.getUTCDate()).padStart(2, '0');
-      return y + '-' + mo + '-' + d;
-    }
-    const s = String(val).trim();
-    // Already ISO
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-    // Numeric serial as string
-    if (/^\d{5}(\.\d+)?$/.test(s)) {
-      const n = parseFloat(s);
-      if (n > 20000 && n < 100000) return toDateInputValue(n);
-    }
+    const parts = calendarPartsFromAny(val);
+    if (parts) return ymdPad(parts.y, parts.mo, parts.d);
     // Never put text like "Critical" / "Domino" into date inputs
     return '';
   }
@@ -3866,31 +3893,9 @@ async function ensureDateStyleId(zip) {
 function toExcelDateSerial(val) {
   if (val === '' || val === undefined || val === null) return null;
   if (typeof val === 'number' && isFinite(val) && val > 20000 && val < 100000) return Math.round(val);
-  const s = String(val).trim();
-  const monMap = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-  let y, mo, d;
-  let m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
-  if (m && monMap[m[2].toLowerCase()]) {
-    d = +m[1]; mo = monMap[m[2].toLowerCase()]; y = +m[3];
-  } else {
-    m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m) { y = +m[1]; mo = +m[2]; d = +m[3]; }
-    else {
-      m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
-      if (m) { d = +m[1]; mo = +m[2]; y = +m[3]; }
-      else if (/^\d{5}(\.\d+)?$/.test(s)) {
-        const n = parseFloat(s);
-        if (n > 20000 && n < 100000) return Math.round(n);
-        return null;
-      } else {
-        const dt = new Date(s);
-        if (isNaN(dt.getTime())) return null;
-        y = dt.getFullYear(); mo = dt.getMonth() + 1; d = dt.getDate();
-      }
-    }
-  }
-  if (!y || !mo || !d) return null;
-  const utc = Date.UTC(y, mo - 1, d);
+  const parts = calendarPartsFromAny(val);
+  if (!parts) return null;
+  const utc = Date.UTC(parts.y, parts.mo - 1, parts.d);
   const epoch = Date.UTC(1899, 11, 30);
   return Math.round((utc - epoch) / 86400000);
 }
@@ -5171,16 +5176,10 @@ function fmtYMD(d) {
 }
 function parseCompanyDate(val) {
   if (val == null || val === '') return null;
-  if (val instanceof Date && !isNaN(val.getTime())) return startOfDay(val);
-  if (typeof val === 'number' && val > 20000) {
-    const utc = new Date(Date.UTC(1899, 11, 30) + Math.round(val) * 86400000);
-    return startOfDay(new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate()));
-  }
-  const s = String(val).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return startOfDay(new Date(s.slice(0,10)));
-  const t = Date.parse(s);
-  if (!isNaN(t)) return startOfDay(new Date(t));
-  return null;
+  // Local calendar midnight from Y-M-D parts — never Date.parse('YYYY-MM-DD') (UTC, off-by-one)
+  const parts = calendarPartsFromAny(val);
+  if (!parts) return null;
+  return startOfDay(new Date(parts.y, parts.mo - 1, parts.d));
 }
 function inRange(date, start, end) {
   if (!date) return false;
