@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.3 (2026-09-04 top10-cached-score)</title>
+<title>SBA Drive CRM v25.5 (2026-09-08 followup-tasks)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -292,7 +292,7 @@ body { padding-bottom: 80px; }
     <div class="kpi-card success"><div class="kpi-value" id="kpiTotal">0</div><div class="kpi-label">Total Customers</div></div>
     <div class="kpi-card warm"><div class="kpi-value" id="kpiActive">0</div><div class="kpi-label">Active Opportunities</div></div>
     <div class="kpi-card hot"><div class="kpi-value" id="kpiCriticalHigh">0</div><div class="kpi-label">Critical + High</div></div>
-    <div class="kpi-card cold"><div class="kpi-value" id="kpiOverdue">0</div><div class="kpi-label">Overdue Follow-ups</div></div>
+    <div class="kpi-card cold" style="cursor:pointer;" onclick="var el=document.getElementById('followUpTasksCard'); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); }" title="Tap to see overdue list"><div class="kpi-value" id="kpiOverdue">0</div><div class="kpi-label">Overdue Follow-ups</div></div>
   </div>
 
   <div class="card" id="pipelineCard" style="display:none;margin-bottom:12px;">
@@ -313,6 +313,20 @@ body { padding-bottom: 80px; }
     <div class="card-title">Activity Trends</div>
     <div style="position:relative;height:200px;margin-bottom:12px;"><canvas id="chartVisits"></canvas></div>
     <div style="position:relative;height:180px;"><canvas id="chartScore"></canvas></div>
+  </div>
+
+  <div class="card" id="followUpTasksCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <span>Follow-up Tasks</span>
+      <button type="button" class="btn btn-secondary btn-sm" onclick="renderFollowUpTasks()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
+    </div>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">
+      Overdue and this week’s next follow-ups with dates. Tap <strong>Job done</strong> to set Last Contact = today and clear the follow-up date (or set the next one). Saves to Drive automatically.
+    </p>
+    <div style="font-size:13px;font-weight:600;color:var(--danger);margin-bottom:6px;">Overdue</div>
+    <div id="overdueFollowUpList" style="margin-bottom:14px;"></div>
+    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:6px;">This week</div>
+    <div id="thisWeekFollowUpList"></div>
   </div>
 
   <div class="card" id="top10Card" style="display:none;margin-bottom:12px;">
@@ -713,7 +727,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-04-top10-cached-score loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-08-followup-tasks loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1401,7 +1415,7 @@ function updateFileUI() {
     const info = document.getElementById('fileInfoCard');
     if (noFile) noFile.style.display = 'block';
     if (info) info.style.display = 'none';
-    ['kpiSection', 'quickActions', 'recentActivityCard', 'pipelineCard', 'priorityCard', 'trendCard', 'top10Card', 'executedSalesCard', 'pptReportCard', 'otherMetricsCard'].forEach(function(id) {
+    ['kpiSection', 'quickActions', 'recentActivityCard', 'pipelineCard', 'priorityCard', 'trendCard', 'followUpTasksCard', 'top10Card', 'executedSalesCard', 'pptReportCard', 'otherMetricsCard'].forEach(function(id) {
       const el = document.getElementById(id);
       if (el) el.style.display = 'none';
     });
@@ -1741,27 +1755,56 @@ function escapeHtml(str) {
 // ==================== DASHBOARD ====================
 let execPeriodMode = 'month'; // month | 3m | 6m | year | all
 
+/**
+ * Priority Score — MUST match Sales Tracker Excel formula:
+ *   MIN(100, ROUND(
+ *     Probability*40
+ *     + VLOOKUP(Sales Potential, _Lists High=30/Med=10/Low=3)
+ *     + VLOOKUP(Relationship, Good=15/Warm=8/Cold=2)
+ *     + MIN(Total Contacted, 10)
+ *     + IF(EstValue>=1000000, 10, IF(EstValue>0, 5, 0))
+ *     + IF(FollowUp < TODAY(), 5, IF(FollowUp within 7 days, 3, 0))
+ *   ))
+ * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
+ */
 function companyPriorityScore(c) {
-  // 1) Prefer Excel/Sheets cached Priority Score when present (matches Google Dashboard Top 10)
-  // 2) Fall back to live compute for brand-new rows that still have blank formula results
   const sheetScore = parseFloat(c.priority_score);
-  if (!isNaN(sheetScore) && sheetScore > 0) {
+  if (!isNaN(sheetScore) && sheetScore >= 0 && String(c.priority_score).trim() !== '') {
     return sheetScore;
   }
-  // Live fallback — same structure as Sales Tracker formula / _Lists
-  const stageProb = { 'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15, 'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4, 'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85, 'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0 };
-  const potMap = { High: 30, Medium: 10, Low: 3 };
-  const relMap = { 'Good Relationship': 15, Warm: 8, Cold: 2 };
+  return computeLivePriorityScore(c);
+}
+
+function computeLivePriorityScore(c) {
+  // Exact mirror of Excel / _Lists
+  const stageProb = {
+    'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
+    'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4,
+    'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85,
+    'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0
+  };
+  const potMap = { 'High': 30, 'Medium': 10, 'Low': 3 };
+  const relMap = { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
+
   const stage = String(c.sales_stage || '').trim();
   let prob = parseFloat(c.probability);
   if (isNaN(prob) || prob < 0) {
     prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
   }
-  // probability in sheet may be 0.65 or 65
-  if (prob > 1) prob = prob / 100;
-  const visits = Math.min(parseFloat(c.total_contacted) || 0, 10);
-  const val = parseFloat(c.est_value) || 0;
+  if (prob > 1) prob = prob / 100; // sheet sometimes stores 65 meaning 65%
+
+  // Total Contacted may arrive as text "0" / "8"
+  let visits = parseFloat(String(c.total_contacted != null ? c.total_contacted : '').replace(/,/g, '').trim());
+  if (isNaN(visits) || visits < 0) visits = 0;
+  visits = Math.min(visits, 10);
+
+  let val = parseFloat(String(c.est_value != null ? c.est_value : '').replace(/,/g, '').replace(/ETB/gi, '').trim());
+  if (isNaN(val) || val < 0) val = 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
+
+  const pot = potMap[String(c.sales_potential || '').trim()] || 0;
+  const rel = relMap[String(c.relationship_level || '').trim()] || 0;
+
   let urgency = 0;
   try {
     const fu = excelSerialToDate(c.next_follow_up_date);
@@ -1769,11 +1812,12 @@ function companyPriorityScore(c) {
       const today = new Date();
       const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
       const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
-      if (fuUTC < todayUTC) urgency = 5;
-      else if (fuUTC - todayUTC <= 7 * 86400000) urgency = 3;
+      if (fuUTC < todayUTC) urgency = 5; // overdue
+      else if ((fuUTC - todayUTC) <= 7 * 86400000) urgency = 3; // due within 7 days
     }
   } catch (e) {}
-  return Math.min(100, Math.round(prob * 40 + (potMap[c.sales_potential] || 0) + (relMap[c.relationship_level] || 0) + visits + valueBonus + urgency));
+
+  return Math.min(100, Math.round(prob * 40 + pot + rel + visits + valueBonus + urgency));
 }
 
 
@@ -2774,7 +2818,184 @@ function isClosedStage(stage) {
   return s === 'won' || s === 'lost' || s === 'no opportunity' || s === 'closed won' || s === 'closed lost';
 }
 
+
+/** Build overdue + this-week follow-up task lists on the dashboard. */
+function getFollowUpTaskLists(companies) {
+  const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
+    return c.name && String(c.name).trim()
+      && !/^(legend|notes?)$/i.test(String(c.name).trim())
+      && String(c.name).indexOf('——') !== 0
+      && !isClosedStage(c.sales_stage);
+  });
+  const today = new Date();
+  const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const weekEnd = todayUTC + 7 * 86400000;
+  const overdue = [];
+  const thisWeek = [];
+  list.forEach(function(c) {
+    const fu = excelSerialToDate(c.next_follow_up_date);
+    if (!fu) return;
+    const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+    const row = { c: c, fu: fu, fuUTC: fuUTC };
+    if (fuUTC < todayUTC) overdue.push(row);
+    else if (fuUTC >= todayUTC && fuUTC <= weekEnd) thisWeek.push(row);
+  });
+  overdue.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
+  thisWeek.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
+  return { overdue: overdue, thisWeek: thisWeek, todayUTC: todayUTC };
+}
+
+function formatFollowUpTaskRow(item, kind) {
+  const c = item.c;
+  const dateStr = (typeof formatDateDDMMMYYYY === 'function')
+    ? (formatDateDDMMMYYYY(item.fu) || ymdPad(item.fu.getUTCFullYear(), item.fu.getUTCMonth() + 1, item.fu.getUTCDate()))
+    : ymdPad(item.fu.getUTCFullYear(), item.fu.getUTCMonth() + 1, item.fu.getUTCDate());
+  const stage = escapeHtml(String(c.sales_stage || ''));
+  const name = escapeHtml(String(c.name || ''));
+  const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+  const rowIndex = c._rowIndex;
+  const border = kind === 'overdue' ? 'border-left:4px solid var(--danger);' : 'border-left:4px solid var(--primary);';
+  const dateColor = kind === 'overdue' ? 'color:var(--danger);font-weight:700;' : 'color:var(--primary);font-weight:600;';
+  return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 8px;margin-bottom:8px;background:var(--bg);border-radius:8px;' + border + '">' +
+    '<div style="flex:1;min-width:0;cursor:pointer;" onclick="editCompany(' + rowIndex + ',\'' + sheet + '\')">' +
+      '<div style="font-weight:600;font-size:14px;">' + name + '</div>' +
+      '<div style="font-size:12px;color:var(--text-light);margin-top:2px;">' + stage + '</div>' +
+      '<div style="font-size:13px;margin-top:4px;' + dateColor + '">Follow-up: ' + escapeHtml(dateStr) + '</div>' +
+    '</div>' +
+    '<button type="button" class="btn btn-success btn-sm" style="width:auto;flex-shrink:0;padding:8px 12px;font-size:12px;" ' +
+      'onclick="event.stopPropagation();markFollowUpJobDone(' + rowIndex + ',\'' + sheet + '\')">' +
+      'Job done</button>' +
+  '</div>';
+}
+
+function renderFollowUpTasks(companies) {
+  const boxOd = document.getElementById('overdueFollowUpList');
+  const boxTw = document.getElementById('thisWeekFollowUpList');
+  const card = document.getElementById('followUpTasksCard');
+  if (!boxOd || !boxTw) return;
+  if (!workbook) {
+    if (card) card.style.display = 'none';
+    return;
+  }
+  const data = getFollowUpTaskLists(companies);
+  boxOd.innerHTML = data.overdue.length
+    ? data.overdue.map(function(item) { return formatFollowUpTaskRow(item, 'overdue'); }).join('')
+    : '<p style="font-size:13px;color:var(--text-light);margin:0 0 8px;">No overdue follow-ups.</p>';
+  boxTw.innerHTML = data.thisWeek.length
+    ? data.thisWeek.map(function(item) { return formatFollowUpTaskRow(item, 'week'); }).join('')
+    : '<p style="font-size:13px;color:var(--text-light);margin:0;">No follow-ups scheduled this week.</p>';
+  if (card) card.style.display = '';
+  // Keep KPI count in sync
+  const kpi = document.getElementById('kpiOverdue');
+  if (kpi && !isMasterMode()) kpi.textContent = String(data.overdue.length);
+}
+
+/**
+ * Mark a follow-up as job done:
+ * - Last Contact Date = today
+ * - Total Contacted += 1
+ * - Next Follow-up Date = optional (prompt); empty removes from overdue / this week
+ */
+function markFollowUpJobDone(rowIndex, sheetName) {
+  if (!workbook) { showToast('Open a file first', 'warning'); return; }
+  const targetName = sheetName || findTargetSheetName();
+  const sheet = workbook.Sheets[targetName];
+  if (!sheet) { showToast('Sheet not found', 'error'); return; }
+  const { headers, data, headerRowIndex } = getSheetAoaInfo(sheet);
+  const headerMap = {};
+  headers.forEach(function(h, i) { if (h) headerMap[normalizeHeader(h)] = i; });
+  const canonMap = buildCanonicalToHeaderKey(headers);
+  const row = data[rowIndex];
+  if (!row) { showToast('Company row not found', 'error'); return; }
+
+  const nameKey = canonMap.name || 'company' || 'name';
+  const nameCol = headerMap[nameKey];
+  const companyName = nameCol != null ? String(row[nameCol] || '') : String(row[0] || '');
+
+  let nextDate = '';
+  try {
+    nextDate = window.prompt(
+      'Job done for "' + companyName + '".\n\nOptional: next follow-up date (YYYY-MM-DD).\nLeave empty to clear follow-up (removes from Overdue / This week).',
+      ''
+    );
+  } catch (e) { nextDate = ''; }
+  if (nextDate === null) return; // user cancelled
+  nextDate = String(nextDate || '').trim();
+  if (nextDate && !/^\d{4}-\d{2}-\d{2}$/.test(nextDate)) {
+    // try dd-mmm-yyyy via calendarPartsFromAny
+    const parts = calendarPartsFromAny(nextDate);
+    if (parts) nextDate = ymdPad(parts.y, parts.mo, parts.d);
+    else {
+      showToast('Use date format YYYY-MM-DD (e.g. 2026-09-15)', 'warning');
+      return;
+    }
+  }
+
+  const today = new Date();
+  const todayYmd = ymdPad(today.getFullYear(), today.getMonth() + 1, today.getDate());
+  const todaySerial = toExcelDateSerial(todayYmd);
+
+  // Read current total contacted
+  const tcKey = canonMap.total_contacted || 'total_contacted';
+  const tcCol = headerMap[tcKey];
+  let totalC = 0;
+  if (tcCol != null) {
+    totalC = parseFloat(String(row[tcCol] != null ? row[tcCol] : '').replace(/,/g, '')) || 0;
+  }
+  totalC = totalC + 1;
+
+  const values = {};
+  function setField(canonical, val) {
+    const actual = canonMap[canonical] || (headerMap[canonical] !== undefined ? canonical : null);
+    if (actual == null || headerMap[actual] === undefined) return;
+    values[actual] = val;
+    values[canonical] = val;
+    row[headerMap[actual]] = val;
+    // in-memory SheetJS cell
+    try {
+      const addr = colLetters(headerMap[actual]) + (rowIndex + 1);
+      XLSX.utils.sheet_add_aoa(sheet, [[val]], { origin: addr });
+    } catch (e) {}
+  }
+
+  setField('last_contact_date', todaySerial != null ? todaySerial : todayYmd);
+  setField('total_contacted', totalC);
+  if (nextDate) {
+    const ser = toExcelDateSerial(nextDate);
+    setField('next_follow_up_date', ser != null ? ser : nextDate);
+  } else {
+    // Clear next follow-up so it leaves overdue / this week
+    setField('next_follow_up_date', '');
+  }
+
+  pendingEdits.push({
+    type: 'edit',
+    sheetName: targetName,
+    rowIndex: rowIndex,
+    excelRow: rowIndex + 1,
+    values: values
+  });
+  markDirtyAndScheduleSave();
+  logActivity({
+    type: 'update',
+    name: companyName || 'Follow-up done',
+    industry: '',
+    temp: 'warm',
+    sheetName: targetName,
+    rowIndex: rowIndex
+  });
+  showToast(
+    nextDate
+      ? ('Job done — next follow-up ' + nextDate)
+      : 'Job done — removed from overdue / this week',
+    'success'
+  );
+  try { renderDashboard(); } catch (e) {}
+  try { renderFollowUpTasks(); } catch (e) {}
+}
+
 function renderDashboard() {
+
   if (!workbook) return;
   const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim()
     && !/^(legend|notes?)$/i.test(String(c.name).trim())
@@ -2872,6 +3093,16 @@ function renderDashboard() {
     ).join('');
   }
   if (el('priorityCard')) el('priorityCard').style.display = '';
+
+  // Follow-up tasks (overdue + this week) — always for tracker
+  try {
+    if (isTrackerMode() || !isMasterMode()) {
+      renderFollowUpTasks(companies);
+    } else {
+      const fcard = el('followUpTasksCard');
+      if (fcard) fcard.style.display = 'none';
+    }
+  } catch (e) { console.warn(e); }
 
   // Top 10 + Executed Sales + PPT — Tracker mode only
   if (isTrackerMode()) {
