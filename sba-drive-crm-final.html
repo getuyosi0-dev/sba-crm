@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.5 (2026-09-08 followup-tasks)</title>
+<title>SBA Drive CRM v25.6 (2026-09-08 recent-priority-badge)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -727,7 +727,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-08-followup-tasks loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-08-recent-priority-badge loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2976,11 +2976,19 @@ function markFollowUpJobDone(rowIndex, sheetName) {
     values: values
   });
   markDirtyAndScheduleSave();
+  var liveCo = null;
+  try {
+    liveCo = getCompaniesFromWorkbook().find(function(x) {
+      return x._rowIndex === rowIndex && String(x._sheetName || '') === String(targetName || '');
+    }) || getCompaniesFromWorkbook().find(function(x) {
+      return String(x.name || '').trim().toLowerCase() === String(companyName || '').trim().toLowerCase();
+    });
+  } catch (e) {}
   logActivity({
     type: 'update',
     name: companyName || 'Follow-up done',
-    industry: '',
-    temp: 'warm',
+    industry: (liveCo && liveCo.industry) || '',
+    temp: liveCo ? companyTempBucket(liveCo) : 'critical',
     sheetName: targetName,
     rowIndex: rowIndex
   });
@@ -3370,15 +3378,21 @@ function renderDashboard() {
   if (el('trendCard')) el('trendCard').style.display = '';
 
   // Recent activity: session adds/edits first, then fill from last-contact — show 10, badge Hot/Warm/Cold
+  const byName = {};
+  companies.forEach(function(c) {
+    const k = String(c.name || '').trim().toLowerCase();
+    if (k) byName[k] = c;
+  });
   const feedItems = recentActivityFeed.slice(0, 10).map(function(a) {
+    const live = byName[String(a.name || '').trim().toLowerCase()] || null;
     return {
       name: a.name,
-      industry: a.industry,
-      temp: a.temp,
+      industry: a.industry || (live && live.industry) || '',
       type: a.type,
-      _rowIndex: a.rowIndex,
-      _sheetName: a.sheetName,
-      _fromFeed: true
+      _rowIndex: a.rowIndex != null ? a.rowIndex : (live && live._rowIndex),
+      _sheetName: a.sheetName || (live && live._sheetName) || '',
+      _fromFeed: true,
+      _live: live
     };
   });
   const feedNames = {};
@@ -3391,7 +3405,8 @@ function renderDashboard() {
   const recent = feedItems.concat(byContact).slice(0, 10);
   if (el('recentActivity')) {
     el('recentActivity').innerHTML = recent.map(function(c) {
-      const bucket = c._fromFeed ? (c.temp || 'warm') : companyTempBucket(c);
+      const source = c._live || c;
+      const bucket = companyTempBucket(source);
       const label = tempLabel(bucket);
       const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
       const sub = escapeHtml(c.industry || '');
