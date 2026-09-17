@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.9 (2026-09-17 weekly-frozen-btn)</title>
+<title>SBA Drive CRM v25.10 (2026-09-17 frozen-save-download)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -491,10 +491,10 @@ body { padding-bottom: 80px; }
     </p>
     <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
     <button class="btn" onclick="generateWeeklyReportUI(false)">Generate / Refresh Report</button>
-    <button class="btn btn-secondary" style="margin-top:8px;" onclick="generateWeeklyReportUI(true)">Generate as end-of-week (frozen)</button>
+    <button class="btn btn-secondary" style="margin-top:8px;" onclick="generateFrozenSaveAndDownload()">Generate as end-of-week (frozen) + Save + Download</button>
     <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
-      <strong>Normal:</strong> before Thu 18:00 → last = previous week, plan = this week.
-      <strong>Frozen:</strong> any time → last = this Fri→Thu, plan = next Fri→Thu (same as after Thu 18:00).
+      <strong>Normal:</strong> before Thu 18:00 → last = previous week, plan = this week (screen only).
+      <strong>Frozen + Save + Download:</strong> end-of-week windows → writes Last Week Report / Next Week Plan to Drive → downloads <code>.xlsx</code> to your device.
     </p>
     <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
   </div>
@@ -735,7 +735,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-17-weekly-frozen-btn loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-17-frozen-save-download loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -5858,9 +5858,49 @@ function generateWeeklyReportUI(forceFrozen) {
   showToast((forceFrozen ? 'End-of-week (frozen): ' : 'Weekly report: ') + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
 }
 
+/**
+ * End-of-week (frozen): generate → save weekly sheets to Drive → download .xlsx
+ */
+async function generateFrozenSaveAndDownload() {
+  if (!workbook || !originalArrayBuffer) {
+    showToast('Open your Excel file first', 'warning');
+    return;
+  }
+  if (!accessToken) {
+    showToast('Sign in to Google first', 'warning');
+    return;
+  }
+  try {
+    generateWeeklyReportUI(true);
+    const w = _weeklyCache;
+    if (!w) {
+      showToast('Could not build weekly report', 'error');
+      return;
+    }
+    const pack = buildWeeklyAoaPack(w);
+    pendingEdits.push({
+      type: 'weeklyReport',
+      weeklyAoa: pack.weeklyAoa,
+      nextWeekAoa: pack.nextWeekAoa,
+      lastWeekAoa: pack.lastWeekAoa
+    });
+    showToast('Saving end-of-week report to Drive…', 'success');
+    const ok = await saveToDrive({ silent: false });
+    if (!ok) {
+      showToast('Drive save failed — report is on screen; try Save Report to Excel or fix permissions', 'error');
+      return;
+    }
+    showToast('Saved to Drive — downloading Excel…', 'success');
+    await downloadFile();
+  } catch (err) {
+    console.error('[SBA] generateFrozenSaveAndDownload', err);
+    showToast('Failed: ' + (err && err.message ? err.message : err), 'error');
+  }
+}
+
 function saveWeeklyReportToExcel() {
   if (!workbook || !originalArrayBuffer) { showToast('Open your Excel file first', 'warning'); return; }
-  if (!_weeklyCache) generateWeeklyReportUI();
+  if (!_weeklyCache) generateWeeklyReportUI(false);
   const w = _weeklyCache;
   if (!w) return;
 
