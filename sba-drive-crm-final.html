@@ -1,3 +1,8 @@
+sba-drive-crm-final.html
+
+
+
+Files
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -7,7 +12,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.11 (2026-09-17 weekly-preview)</title>
+<title>SBA Drive CRM v25.12 (2026-09-17 preview-sticky-btns)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -543,24 +548,24 @@ body { padding-bottom: 80px; }
 <!-- Add Company Modal -->
 
 <div class="modal-overlay" id="modalWeeklyPreview">
-  <div class="modal-sheet" style="max-width:720px;">
-    <div class="modal-header">
-      <div class="modal-title">Weekly report preview</div>
-      <button class="modal-close" onclick="closeModal('modalWeeklyPreview')">&times;</button>
+  <div class="modal-sheet" style="max-width:720px;display:flex;flex-direction:column;max-height:90vh;">
+    <div class="modal-header" style="flex-shrink:0;flex-wrap:wrap;gap:10px;align-items:center;">
+      <div class="modal-title" style="flex:1;min-width:120px;">Weekly report preview</div>
+      <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
+        <button type="button" class="btn btn-secondary btn-sm" style="width:auto;padding:8px 14px;" onclick="closeModal('modalWeeklyPreview')">Close</button>
+        <button type="button" class="btn btn-sm" style="width:auto;padding:8px 14px;" onclick="confirmWeeklyPreviewDownload()">Download Excel</button>
+        <button class="modal-close" onclick="closeModal('modalWeeklyPreview')" aria-label="Close">&times;</button>
+      </div>
     </div>
-    <div class="modal-body">
+    <div class="modal-body" style="overflow-y:auto;flex:1;-webkit-overflow-scrolling:touch;">
       <div id="weeklyPreviewMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
       <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Last week — job done</div>
-      <div id="weeklyPreviewLast" style="overflow-x:auto;margin-bottom:14px;max-height:28vh;overflow-y:auto;"></div>
+      <div id="weeklyPreviewLast" style="overflow-x:auto;margin-bottom:14px;"></div>
       <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Next week plan</div>
-      <div id="weeklyPreviewNext" style="overflow-x:auto;max-height:28vh;overflow-y:auto;"></div>
+      <div id="weeklyPreviewNext" style="overflow-x:auto;"></div>
       <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">
         Report is already saved to Drive (if save succeeded). Download only if you want a local <code>.xlsx</code> copy.
       </p>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('modalWeeklyPreview')">Close</button>
-      <button class="btn" onclick="confirmWeeklyPreviewDownload()">Download Excel</button>
     </div>
   </div>
 </div>
@@ -759,7 +764,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-17-weekly-preview loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-17-preview-sticky-btns loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
