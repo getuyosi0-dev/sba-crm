@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.10 (2026-09-17 frozen-save-download)</title>
+<title>SBA Drive CRM v25.11 (2026-09-17 weekly-preview)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -491,10 +491,10 @@ body { padding-bottom: 80px; }
     </p>
     <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
     <button class="btn" onclick="generateWeeklyReportUI(false)">Generate / Refresh Report</button>
-    <button class="btn btn-secondary" style="margin-top:8px;" onclick="generateFrozenSaveAndDownload()">Generate as end-of-week (frozen) + Save + Download</button>
+    <button class="btn btn-secondary" style="margin-top:8px;" onclick="generateFrozenSaveAndDownload()">Generate as end-of-week (frozen) + Save + Preview</button>
     <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
       <strong>Normal:</strong> before Thu 18:00 → last = previous week, plan = this week (screen only).
-      <strong>Frozen + Save + Download:</strong> end-of-week windows → writes Last Week Report / Next Week Plan to Drive → downloads <code>.xlsx</code> to your device.
+      <strong>Frozen + Save + Preview:</strong> end-of-week windows → save to Drive → preview → optional Download Excel.
     </p>
     <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
   </div>
@@ -541,6 +541,30 @@ body { padding-bottom: 80px; }
 </div><!-- end mainApp -->
 
 <!-- Add Company Modal -->
+
+<div class="modal-overlay" id="modalWeeklyPreview">
+  <div class="modal-sheet" style="max-width:720px;">
+    <div class="modal-header">
+      <div class="modal-title">Weekly report preview</div>
+      <button class="modal-close" onclick="closeModal('modalWeeklyPreview')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div id="weeklyPreviewMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Last week — job done</div>
+      <div id="weeklyPreviewLast" style="overflow-x:auto;margin-bottom:14px;max-height:28vh;overflow-y:auto;"></div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px;">Next week plan</div>
+      <div id="weeklyPreviewNext" style="overflow-x:auto;max-height:28vh;overflow-y:auto;"></div>
+      <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">
+        Report is already saved to Drive (if save succeeded). Download only if you want a local <code>.xlsx</code> copy.
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modalWeeklyPreview')">Close</button>
+      <button class="btn" onclick="confirmWeeklyPreviewDownload()">Download Excel</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modalAddCompany">
   <div class="modal-sheet">
     <div class="modal-header"><div class="modal-title" id="addCompanyModalTitle">Add Company</div><button class="modal-close" onclick="closeModal('modalAddCompany')">&times;</button></div>
@@ -735,7 +759,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-17-frozen-save-download loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-17-weekly-preview loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -5859,7 +5883,7 @@ function generateWeeklyReportUI(forceFrozen) {
 }
 
 /**
- * End-of-week (frozen): generate → save weekly sheets to Drive → download .xlsx
+ * End-of-week (frozen): generate → save to Drive → preview modal → user chooses Download
  */
 async function generateFrozenSaveAndDownload() {
   if (!workbook || !originalArrayBuffer) {
@@ -5887,14 +5911,61 @@ async function generateFrozenSaveAndDownload() {
     showToast('Saving end-of-week report to Drive…', 'success');
     const ok = await saveToDrive({ silent: false });
     if (!ok) {
-      showToast('Drive save failed — report is on screen; try Save Report to Excel or fix permissions', 'error');
+      showToast('Drive save failed — you can still preview on screen', 'error');
+      openWeeklyPreviewModal(w, false);
       return;
     }
-    showToast('Saved to Drive — downloading Excel…', 'success');
-    await downloadFile();
+    showToast('Saved to Drive — review preview, then download if needed', 'success');
+    openWeeklyPreviewModal(w, true);
   } catch (err) {
     console.error('[SBA] generateFrozenSaveAndDownload', err);
     showToast('Failed: ' + (err && err.message ? err.message : err), 'error');
+  }
+}
+
+function openWeeklyPreviewModal(w, savedOk) {
+  w = w || _weeklyCache;
+  if (!w) return;
+  const meta = document.getElementById('weeklyPreviewMeta');
+  if (meta) {
+    meta.innerHTML =
+      '<div><strong>Last week:</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) +
+        ' — <strong>' + w.lastWeek.length + '</strong> contacts</div>' +
+      '<div><strong>Plan week:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) +
+        ' — <strong>' + w.nextWeek.length + '</strong> items</div>' +
+      '<div style="margin-top:4px;color:var(--text-light);">' +
+        (savedOk ? 'Saved to Drive. ' : 'Not saved to Drive. ') +
+        'End-of-week (frozen) · ' + w.generatedAt.toLocaleString() +
+      '</div>';
+  }
+  const lastCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'last_contact_date', label: 'Last Contact' },
+    { key: 'sales_stage', label: 'Stage' },
+    { key: 'notes', label: 'Summary' }
+  ];
+  const nextCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'next_follow_up_date', label: 'Follow-up' },
+    { key: 'sales_stage', label: 'Stage' },
+    { key: '_flag', label: 'Flag' }
+  ];
+  w.nextWeek.forEach(function(r) { r._flag = r._overdue ? 'OVERDUE' : ''; });
+  const pl = document.getElementById('weeklyPreviewLast');
+  const pn = document.getElementById('weeklyPreviewNext');
+  if (pl) pl.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
+  if (pn) pn.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
+  openModal('modalWeeklyPreview');
+}
+
+async function confirmWeeklyPreviewDownload() {
+  try {
+    closeModal('modalWeeklyPreview');
+    showToast('Downloading Excel…', 'success');
+    await downloadFile();
+  } catch (err) {
+    console.error('[SBA] confirmWeeklyPreviewDownload', err);
+    showToast('Download failed: ' + (err && err.message ? err.message : err), 'error');
   }
 }
 
