@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.8 (2026-09-13 postpone)</title>
+<title>SBA Drive CRM v25.9 (2026-09-17 weekly-frozen-btn)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -490,7 +490,12 @@ body { padding-bottom: 80px; }
       Auto-runs Thursday after 18:00 or Friday. You can Generate / Save any day.
     </p>
     <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
-    <button class="btn" onclick="generateWeeklyReportUI()">Generate / Refresh Report</button>
+    <button class="btn" onclick="generateWeeklyReportUI(false)">Generate / Refresh Report</button>
+    <button class="btn btn-secondary" style="margin-top:8px;" onclick="generateWeeklyReportUI(true)">Generate as end-of-week (frozen)</button>
+    <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
+      <strong>Normal:</strong> before Thu 18:00 → last = previous week, plan = this week.
+      <strong>Frozen:</strong> any time → last = this Fri→Thu, plan = next Fri→Thu (same as after Thu 18:00).
+    </p>
     <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
   </div>
   <div class="card" style="margin-top:12px;">
@@ -730,7 +735,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-13-postpone loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-17-weekly-frozen-btn loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -5608,8 +5613,9 @@ function inRange(date, start, end) {
 
 let _weeklyCache = null;
 
-function computeWeeklyReports(refDate) {
+function computeWeeklyReports(refDate, opts) {
   const ref = refDate || new Date();
+  opts = opts || {};
   // Week = Friday 00:00 → Thursday 23:59 (local).
   // Freeze every Thursday 18:00 of the *current* Fri→Thu cycle:
   //
@@ -5617,7 +5623,7 @@ function computeWeeklyReports(refDate) {
   //   Last week  = previous Fri→Thu (work already done)
   //   Plan week  = THIS Fri→Thu (the week you are in / organising)
   //
-  // AFTER freeze (Thu 18:00 … until next Fri):
+  // AFTER freeze (Thu 18:00 … until next Fri) OR forceFrozen:
   //   Last week  = this Fri→Thu (locked)
   //   Plan week  = next Fri→Thu
   //
@@ -5630,7 +5636,8 @@ function computeWeeklyReports(refDate) {
   freeze.setHours(18, 0, 0, 0);
 
   let lastFri, lastThu, planFri, planThu, frozen;
-  if (ref.getTime() < freeze.getTime()) {
+  const useFrozen = !!opts.forceFrozen || ref.getTime() >= freeze.getTime();
+  if (!useFrozen) {
     frozen = false;
     lastFri = new Date(thisFri); lastFri.setDate(lastFri.getDate() - 7);
     lastThu = weekEndThursday(lastFri);
@@ -5796,9 +5803,10 @@ function renderWeeklyTable(rows, cols) {
   return h;
 }
 
-function generateWeeklyReportUI() {
+function generateWeeklyReportUI(forceFrozen) {
   if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
-  _weeklyCache = computeWeeklyReports(new Date());
+  forceFrozen = !!forceFrozen;
+  _weeklyCache = computeWeeklyReports(new Date(), { forceFrozen: forceFrozen });
   const w = _weeklyCache;
   const overdueCount = w.nextWeek.filter(function(r) { return r._overdue; }).length;
   const meta = document.getElementById('weeklyMeta');
@@ -5811,9 +5819,13 @@ function generateWeeklyReportUI() {
         (overdueCount ? ' <span style="color:var(--danger);">(' + overdueCount + ' overdue)</span>' : '') +
         '</div>' +
       '<div><strong>Freeze:</strong> Thursday 18:00 — ' +
-        (w.frozen ? '<span style="color:var(--warning);">LOCKED</span> (plan = next Fri→Thu)' : 'open until ' + w.freezeAt.toLocaleString()) +
+        (w.frozen
+          ? ('<span style="color:var(--warning);">LOCKED</span> (plan = next Fri→Thu)' +
+             (forceFrozen && new Date() < w.freezeAt ? ' · <em>manual end-of-week view</em>' : ''))
+          : ('open until ' + w.freezeAt.toLocaleString())) +
         '</div>' +
       '<div style="margin-top:4px;color:var(--text-light);">Generated ' + w.generatedAt.toLocaleString() +
+        (forceFrozen ? ' · <strong>End-of-week (frozen) mode</strong>' : '') +
         ' · Last week = Last Contact date · Plan = Next Follow-up (open deals) + overdue</div>';
   }
   const lt = document.getElementById('lastWeekTitle');
@@ -5843,7 +5855,7 @@ function generateWeeklyReportUI() {
   const nw = document.getElementById('nextWeekTable');
   if (lw) lw.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
   if (nw) nw.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
-  showToast('Weekly report: ' + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
+  showToast((forceFrozen ? 'End-of-week (frozen): ' : 'Weekly report: ') + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
 }
 
 function saveWeeklyReportToExcel() {
