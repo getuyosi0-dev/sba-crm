@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.14 (2026-09-18 mailto-fix)</title>
+<title>SBA Drive CRM v25.15 (2026-09-18 mailto-modal)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -550,6 +550,26 @@ body { padding-bottom: 80px; }
 
 <!-- Add Company Modal -->
 
+
+<div class="modal-overlay" id="modalEmailWeekly">
+  <div class="modal-sheet" style="max-width:520px;">
+    <div class="modal-header" style="flex-shrink:0;">
+      <div class="modal-title">Email weekly report</div>
+      <button class="modal-close" onclick="closeModal('modalEmailWeekly')">&times;</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px;margin:0 0 10px;">To open Outlook with the message ready, tap the button below (required by the browser).</p>
+      <p id="emailWeeklySummary" style="font-size:13px;color:var(--text-light);margin:0 0 14px;"></p>
+      <a id="emailWeeklyMailtoLink" class="btn" href="#" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px;">Open in Outlook</a>
+      <button type="button" class="btn btn-secondary" style="width:100%;" onclick="downloadFile(); showToast('Excel downloaded — attach it in Outlook', 'success');">Download Excel again</button>
+      <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">After Outlook opens: attach the downloaded <code>.xlsx</code> from Downloads, then Send.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('modalEmailWeekly')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modalWeeklyPreview">
   <div class="modal-sheet" style="max-width:720px;display:flex;flex-direction:column;max-height:90vh;">
     <div class="modal-header" style="flex-shrink:0;flex-wrap:wrap;gap:10px;align-items:center;">
@@ -768,7 +788,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-mailto-fix loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-mailto-modal loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -6055,55 +6075,46 @@ async function emailWeeklyReport() {
   var content = buildWeeklyEmailContent(w);
   if (!content) return;
 
-  // IMPORTANT: open mailto in the same user-gesture turn (before any await).
-  // Browsers block mail apps if we await download first.
-  var mailto = 'mailto:' + encodeURIComponent(to) +
+  // Do NOT encode the email local-part in the mailto path (breaks some Outlook setups)
+  var mailto = 'mailto:' + to +
     '?subject=' + encodeURIComponent(content.subject) +
     '&body=' + encodeURIComponent(content.body);
 
-  var opened = false;
+  // Always show a panel with a real <a href="mailto:"> — second click always works in Chrome
+  var sum = document.getElementById('emailWeeklySummary');
+  if (sum) {
+    sum.textContent = 'To: ' + to + ' · Job done ' + content.lastRange + ' · Plan ' + content.planRange;
+  }
+  var link = document.getElementById('emailWeeklyMailtoLink');
+  if (link) {
+    link.setAttribute('href', mailto);
+    // Remove target=_blank — mailto should be handled by OS, not a tab
+    link.removeAttribute('target');
+  }
+  openModal('modalEmailWeekly');
+
+  // Try automatic open once (may be blocked on GitHub Pages / managed Chrome)
   try {
     var a = document.createElement('a');
     a.href = mailto;
-    a.style.display = 'none';
+    a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    opened = true;
-  } catch (e1) {
-    console.warn('[SBA] mailto a.click', e1);
-  }
-  if (!opened) {
-    try {
-      window.location.href = mailto;
-      opened = true;
-    } catch (e2) {
-      console.warn('[SBA] mailto location', e2);
-    }
-  }
-  if (!opened) {
-    try {
-      window.open(mailto, '_blank');
-      opened = true;
-    } catch (e3) {}
+  } catch (e) {
+    console.warn('[SBA] auto mailto', e);
   }
 
-  if (!opened) {
-    showToast('Could not open Outlook. Check that mailto/Outlook is the default mail app.', 'error');
-  } else {
-    showToast('Outlook should open — then attach the Excel from Downloads and Send', 'success');
-  }
-
-  // Download Excel after opening mail (attachment is manual)
+  // Download Excel for attachment
   try {
     if (originalArrayBuffer) {
       setTimeout(function() {
-        downloadFile().catch(function(e) { console.warn('[SBA] email download', e); });
-      }, 400);
+        downloadFile().catch(function(err) { console.warn('[SBA] email download', err); });
+      }, 300);
     }
-  } catch (e) {
-    console.warn('[SBA] email download schedule', e);
-  }
+  } catch (e) {}
+
+  showToast('Tap “Open in Outlook” if mail did not open, then attach the Excel', 'success');
 }
 
 function initWeeklyEmailToField() {
