@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.23 (2026-09-18 ppt-custom-range)</title>
+<title>SBA Drive CRM v25.25 (2026-09-18 auto-refresh-plan)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -498,7 +498,7 @@ body { padding-bottom: 80px; }
     <p style="font-size:13px;color:var(--text-light);margin:0 0 12px;">
       Week = <strong>Friday → Thursday</strong>. Freezes <strong>Thursday 18:00</strong>.
       <strong>Last week</strong> = companies with Last Contact in the finished week.
-      <strong>Next week plan</strong> = open deals with Next Follow-up in the plan week (plus overdue follow-ups).
+      <strong>Next week plan</strong> = open deals with Next Follow-up <em>in the plan week only</em>. Overdue stays on the Dashboard (use Job done / Postpone).
       Auto-runs Thursday after 18:00 or Friday. You can Generate / Save any day.
     </p>
     <div id="weeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;"></div>
@@ -867,7 +867,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-ppt-custom-range loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-auto-refresh-plan loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -3260,6 +3260,7 @@ function postponeFollowUp(rowIndex, sheetName) {
   showToast('Postponed to ' + nextYmd, 'success');
   try { renderDashboard(); } catch (e) {}
   try { renderFollowUpTasks(); } catch (e) {}
+  try { refreshWeeklyViewsAfterFollowUpChange(); } catch (e) {}
 }
 
 /**
@@ -3372,6 +3373,7 @@ function markFollowUpJobDone(rowIndex, sheetName) {
   );
   try { renderDashboard(); } catch (e) {}
   try { renderFollowUpTasks(); } catch (e) {}
+  try { refreshWeeklyViewsAfterFollowUpChange(); } catch (e) {}
 }
 
 function renderDashboard() {
@@ -4084,6 +4086,7 @@ function saveCompanyEdit() {
   navigate('companies');
   renderCompanies();
   renderDashboard();
+  try { refreshWeeklyViewsAfterFollowUpChange(); } catch (e) {}
 }
 
 /** Clear a wrong/test company row (e.g. "Yosef") on Sales Tracker and save to Drive. */
@@ -5926,16 +5929,9 @@ function computeWeeklyReports(refDate, opts) {
     // Next week plan: open deals only
     if (closed) return;
 
-    let includePlan = false;
+    // Next week plan: only follow-ups scheduled inside the plan week (not overdue).
+    // Overdue companies stay on the Dashboard Follow-up Tasks list (Job done / Postpone).
     if (followUp && inRange(followUp, planFri, planThu)) {
-      includePlan = true;
-    } else if (followUp && followUp.getTime() < planFri.getTime()) {
-      // Overdue follow-up still open → include so it stays on the plan
-      includePlan = true;
-      row._overdue = true;
-    }
-
-    if (includePlan) {
       const key = String(row.company).toLowerCase();
       if (!seenNext[key]) {
         seenNext[key] = true;
@@ -5948,8 +5944,6 @@ function computeWeeklyReports(refDate, opts) {
     return (b.last_contact_date || '').localeCompare(a.last_contact_date || '');
   });
   nextWeek.sort(function(a, b) {
-    // Overdue first, then by follow-up date ascending
-    if (a._overdue !== b._overdue) return a._overdue ? -1 : 1;
     return (a.next_follow_up_date || '').localeCompare(b.next_follow_up_date || '');
   });
 
@@ -6091,7 +6085,9 @@ function generateWeeklyReportUI(forceFrozen) {
   const nw = document.getElementById('nextWeekTable');
   if (lw) lw.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
   if (nw) nw.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
-  showToast((forceFrozen ? 'End-of-week (frozen): ' : 'Weekly report: ') + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
+  if (!silent) {
+    showToast((forceFrozen ? 'End-of-week (frozen): ' : 'Weekly report: ') + w.lastWeek.length + ' done last week, ' + w.nextWeek.length + ' on plan', 'success');
+  }
 }
 
 /**
