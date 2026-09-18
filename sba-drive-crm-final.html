@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.17 (2026-09-18 email-page)</title>
+<title>SBA Drive CRM v25.20 (2026-09-18 download-week-suffix)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -538,8 +538,9 @@ body { padding-bottom: 80px; }
     </p>
     <textarea class="form-input" id="emailReportBody" rows="10" style="min-height:160px;font-family:inherit;line-height:1.45;"></textarea>
 
-    <label class="form-label" for="emailReportSignature" style="margin-top:10px;">Signature</label>
-    <textarea class="form-input" id="emailReportSignature" rows="8" style="min-height:120px;font-family:inherit;line-height:1.45;"></textarea>
+    <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">
+      Signature is <strong>not</strong> included here — use your Outlook signature (logo, colours, SBA block).
+    </p>
 
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">
       <button type="button" class="btn" onclick="refreshEmailReportFromWeekly()">Fill from weekly report</button>
@@ -842,7 +843,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-email-page loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-download-week-suffix loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1501,8 +1502,9 @@ function retrySaveToDrive() {
   saveToDrive({ silent: false });
 }
 
-async function downloadFile() {
+async function downloadFile(opts) {
   if (!originalArrayBuffer) { showToast('No file loaded', 'error'); return; }
+  opts = opts || {};
   let outBuf;
   try {
     outBuf = await generateSafeWorkbookBuffer();
@@ -1514,7 +1516,24 @@ async function downloadFile() {
   // Always download as real Excel (.xlsx), even when Drive file is a Google Sheet
   var baseName = (currentFile && currentFile.name) ? String(currentFile.name) : 'SBA_Workbook';
   baseName = baseName.replace(/\.xlsx$/i, '').replace(/\.xls$/i, '').replace(/\.gsheet$/i, '').trim() || 'SBA_Workbook';
-  var fileName = baseName + '.xlsx';
+  // Strip any previous week suffix so we don't stack them
+  baseName = baseName.replace(/_Weekly_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}$/i, '');
+  baseName = baseName.replace(/_JobDone_.*$/i, '');
+
+  var weekSuffix = '';
+  var w = opts.weekly || _weeklyCache;
+  if (w && w.lastFri && w.lastThu && typeof fmtYMD === 'function') {
+    weekSuffix = '_Weekly_' + fmtYMD(w.lastFri) + '_to_' + fmtYMD(w.lastThu);
+  } else if (opts.forceWeek !== false && workbook) {
+    try {
+      w = _weeklyCache || computeWeeklyReports(new Date());
+      if (w && w.lastFri && w.lastThu && typeof fmtYMD === 'function') {
+        weekSuffix = '_Weekly_' + fmtYMD(w.lastFri) + '_to_' + fmtYMD(w.lastThu);
+      }
+    } catch (e) {}
+  }
+
+  var fileName = baseName + weekSuffix + '.xlsx';
   const blob = new Blob([outBuf], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   });
@@ -1529,7 +1548,7 @@ async function downloadFile() {
   showToast('Downloaded as Excel: ' + fileName, 'success');
 }
 
-// ==================== UI UPDATES ====================
+
 function updateFileUI() {
   if (!currentFile) {
     const noFile = document.getElementById('noFileCard');
@@ -6122,15 +6141,7 @@ function defaultEmailReportSettings() {
       'Please find attached Excel file:\n' +
       'The weekly activity report for the period {{periodStart}} – {{periodEnd}}.\n\n' +
       'Please let me know if you need any clarification or additional information.',
-    signature:
-      'Best regards,\n' +
-      'Yosef Getu\n' +
-      'MI Field Engineer\n\n' +
-      'Mob :  + 251-923-282-003\n' +
-      'Office: + 251-118-228-879\n' +
-      'Address: SBA Ethiopia Installation and Maintenance PLC. No. 101 SIHAM Building,\n' +
-      '         1st Floor, Ghana Street, Around Bole Atlas, Addis Ababa, Ethiopia\n' +
-      'Email : yosef.getu@sba-group.org'
+    signature: ''
   };
 }
 
@@ -6158,7 +6169,7 @@ function saveEmailReportSettings() {
     greeting: (document.getElementById('emailReportGreeting') || {}).value || '',
     subject: (document.getElementById('emailReportSubject') || {}).value || '',
     body: (document.getElementById('emailReportBody') || {}).value || '',
-    signature: (document.getElementById('emailReportSignature') || {}).value || ''
+    signature: ''  // Outlook signature only — not stored in app
   };
   try {
     localStorage.setItem(EMAIL_REPORT_STORAGE, JSON.stringify(s));
@@ -6245,15 +6256,13 @@ function buildEmailReportMessage() {
   var ph = getEmailReportPlaceholders();
   var greeting = (document.getElementById('emailReportGreeting') || {}).value || '';
   var body = applyEmailPlaceholders((document.getElementById('emailReportBody') || {}).value || '', ph);
-  var sig = (document.getElementById('emailReportSignature') || {}).value || '';
   var subjectTpl = (document.getElementById('emailReportSubject') || {}).value || '';
   var subject = applyEmailPlaceholders(subjectTpl, ph);
+  // Signature omitted — user uses Outlook signature (logo, colours)
   var parts = [];
   if (greeting.trim()) parts.push(greeting.trim());
   parts.push('');
   if (body.trim()) parts.push(body.trim());
-  parts.push('');
-  if (sig.trim()) parts.push(sig.trim());
   return {
     to: ((document.getElementById('emailReportTo') || {}).value || '').trim(),
     subject: subject,
