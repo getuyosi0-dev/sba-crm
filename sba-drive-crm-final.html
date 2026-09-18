@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.25 (2026-09-18 auto-refresh-plan)</title>
+<title>SBA Drive CRM v25.26 (2026-09-18 this-week-fri-thu)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -318,14 +318,14 @@ body { padding-bottom: 80px; }
       <button type="button" class="btn btn-secondary btn-sm" onclick="renderFollowUpTasks()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
     <p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">
-      Overdue and this week’s next follow-ups with dates.
+      Overdue and <strong>this SBA week</strong> (Friday → Thursday, same as Weekly page).
       <strong>Job done</strong> = visited/called (Last Contact = today).
       <strong>Postpone</strong> = push Next Follow-up (+1 / +3 / +7 days or pick a date) without marking the visit done.
       Saves to Drive automatically.
     </p>
     <div style="font-size:13px;font-weight:600;color:var(--danger);margin-bottom:6px;">Overdue</div>
     <div id="overdueFollowUpList" style="margin-bottom:14px;"></div>
-    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:6px;">This week</div>
+    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:6px;" data-followup-week-title>This week (Fri → Thu)</div>
     <div id="thisWeekFollowUpList"></div>
   </div>
 
@@ -867,7 +867,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-auto-refresh-plan loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-this-week-fri-thu loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -3069,7 +3069,10 @@ function isClosedStage(stage) {
 }
 
 
-/** Build overdue + this-week follow-up task lists on the dashboard. */
+/** Build overdue + this-week follow-up task lists on the dashboard.
+ *  "This week" = same SBA week as Weekly page: Friday 00:00 → Thursday 23:59
+ *  (the Fri→Thu cycle that contains today), not a rolling 7 days.
+ */
 function getFollowUpTaskLists(companies) {
   const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
     return c.name && String(c.name).trim()
@@ -3079,7 +3082,11 @@ function getFollowUpTaskLists(companies) {
   });
   const today = new Date();
   const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  const weekEnd = todayUTC + 7 * 86400000;
+  // Same helpers as computeWeeklyReports
+  const thisFri = weekStartFriday(today);
+  const thisThu = weekEndThursday(thisFri);
+  const weekStartUTC = Date.UTC(thisFri.getFullYear(), thisFri.getMonth(), thisFri.getDate());
+  const weekEndUTC = Date.UTC(thisThu.getFullYear(), thisThu.getMonth(), thisThu.getDate());
   const overdue = [];
   const thisWeek = [];
   list.forEach(function(c) {
@@ -3087,12 +3094,24 @@ function getFollowUpTaskLists(companies) {
     if (!fu) return;
     const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
     const row = { c: c, fu: fu, fuUTC: fuUTC };
-    if (fuUTC < todayUTC) overdue.push(row);
-    else if (fuUTC >= todayUTC && fuUTC <= weekEnd) thisWeek.push(row);
+    if (fuUTC < todayUTC) {
+      overdue.push(row);
+    } else if (fuUTC >= weekStartUTC && fuUTC <= weekEndUTC) {
+      // Remaining follow-ups in this Fri→Thu week (including today)
+      thisWeek.push(row);
+    }
   });
   overdue.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
   thisWeek.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
-  return { overdue: overdue, thisWeek: thisWeek, todayUTC: todayUTC };
+  return {
+    overdue: overdue,
+    thisWeek: thisWeek,
+    todayUTC: todayUTC,
+    weekStartUTC: weekStartUTC,
+    weekEndUTC: weekEndUTC,
+    thisFri: thisFri,
+    thisThu: thisThu
+  };
 }
 
 function formatFollowUpTaskRow(item, kind) {
@@ -3134,9 +3153,17 @@ function renderFollowUpTasks(companies) {
   boxOd.innerHTML = data.overdue.length
     ? data.overdue.map(function(item) { return formatFollowUpTaskRow(item, 'overdue'); }).join('')
     : '<p style="font-size:13px;color:var(--text-light);margin:0 0 8px;">No overdue follow-ups.</p>';
+  var weekLabel = 'This week (Fri → Thu)';
+  try {
+    if (data.thisFri && data.thisThu && typeof fmtYMD === 'function') {
+      weekLabel = 'This week ' + fmtYMD(data.thisFri) + ' → ' + fmtYMD(data.thisThu);
+    }
+  } catch (e) {}
+  var weekHead = document.querySelector('#followUpTasksCard [data-followup-week-title]');
+  if (weekHead) weekHead.textContent = weekLabel;
   boxTw.innerHTML = data.thisWeek.length
     ? data.thisWeek.map(function(item) { return formatFollowUpTaskRow(item, 'week'); }).join('')
-    : '<p style="font-size:13px;color:var(--text-light);margin:0;">No follow-ups scheduled this week.</p>';
+    : '<p style="font-size:13px;color:var(--text-light);margin:0;">No follow-ups in this Fri → Thu week.</p>';
   if (card) card.style.display = '';
   // Keep KPI count in sync
   const kpi = document.getElementById('kpiOverdue');
