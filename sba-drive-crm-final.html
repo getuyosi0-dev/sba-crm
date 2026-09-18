@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.12 (2026-09-17 preview-sticky-btns)</title>
+<title>SBA Drive CRM v25.13 (2026-09-18 email-weekly)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -497,6 +497,14 @@ body { padding-bottom: 80px; }
       <strong>Frozen + Save + Preview:</strong> end-of-week windows → save to Drive → preview → optional Download Excel.
     </p>
     <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
+      <label class="form-label" for="weeklyEmailTo">Send to (email)</label>
+      <input type="email" class="form-input" id="weeklyEmailTo" placeholder="boss@sba-group.org" autocomplete="email" style="margin-bottom:8px;">
+      <button class="btn btn-secondary" type="button" onclick="emailWeeklyReport()">Email weekly report</button>
+      <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
+        Opens Outlook with To, subject, and body filled (week dates + summary). The app also downloads the Excel so you can attach it before Send.
+      </p>
+    </div>
   </div>
   <div class="card" style="margin-top:12px;">
     <div class="card-title" id="lastWeekTitle">Last Week Report</div>
@@ -546,9 +554,10 @@ body { padding-bottom: 80px; }
   <div class="modal-sheet" style="max-width:720px;display:flex;flex-direction:column;max-height:90vh;">
     <div class="modal-header" style="flex-shrink:0;flex-wrap:wrap;gap:10px;align-items:center;">
       <div class="modal-title" style="flex:1;min-width:120px;">Weekly report preview</div>
-      <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;">
+      <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap;">
         <button type="button" class="btn btn-secondary btn-sm" style="width:auto;padding:8px 14px;" onclick="closeModal('modalWeeklyPreview')">Close</button>
         <button type="button" class="btn btn-sm" style="width:auto;padding:8px 14px;" onclick="confirmWeeklyPreviewDownload()">Download Excel</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="width:auto;padding:8px 14px;" onclick="emailWeeklyReport()">Email</button>
         <button class="modal-close" onclick="closeModal('modalWeeklyPreview')" aria-label="Close">&times;</button>
       </div>
     </div>
@@ -759,7 +768,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-17-preview-sticky-btns loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-email-weekly loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1527,7 +1536,8 @@ function markDirtyAndScheduleSave() {
 // ==================== NAVIGATION ====================
 function navigate(screen) {
   if (screen === 'weekly' && workbook) {
-    try { generateWeeklyReportUI(); } catch (e) { console.warn(e); }
+    try { initWeeklyEmailToField(); } catch (e) {}
+    try { generateWeeklyReportUI(false); } catch (e) { console.warn(e); }
   }
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -5967,6 +5977,128 @@ async function confirmWeeklyPreviewDownload() {
     console.error('[SBA] confirmWeeklyPreviewDownload', err);
     showToast('Download failed: ' + (err && err.message ? err.message : err), 'error');
   }
+}
+
+function getWeeklyEmailTo() {
+  var el = document.getElementById('weeklyEmailTo');
+  var v = el ? String(el.value || '').trim() : '';
+  if (!v) {
+    try { v = String(localStorage.getItem('sba_weekly_email_to') || '').trim(); } catch (e) {}
+    if (v && el) el.value = v;
+  }
+  return v;
+}
+
+function saveWeeklyEmailTo(addr) {
+  try { localStorage.setItem('sba_weekly_email_to', addr || ''); } catch (e) {}
+}
+
+function buildWeeklyEmailContent(w) {
+  w = w || _weeklyCache;
+  if (!w) return null;
+  var lastRange = fmtYMD(w.lastFri) + ' to ' + fmtYMD(w.lastThu);
+  var planRange = fmtYMD(w.planFri) + ' to ' + fmtYMD(w.planThu);
+  var subject = 'SBA Weekly Report — Job done ' + lastRange + ' | Plan ' + planRange;
+  var lines = [];
+  lines.push('Dear colleague,');
+  lines.push('');
+  lines.push('Please find the SBA Ethiopia weekly sales report.');
+  lines.push('');
+  lines.push('Last week (job done): ' + lastRange);
+  lines.push('  Contacts / visits logged: ' + w.lastWeek.length);
+  lines.push('');
+  lines.push('Next week plan: ' + planRange);
+  lines.push('  Planned follow-ups: ' + w.nextWeek.length);
+  var od = (w.nextWeek || []).filter(function(r) { return r._overdue; }).length;
+  if (od) lines.push('  Of which overdue: ' + od);
+  lines.push('');
+  lines.push('Please attach the Excel file that was downloaded from the CRM (Last Week Report + Next Week Plan).');
+  lines.push('');
+  lines.push('Generated: ' + (w.generatedAt ? w.generatedAt.toLocaleString() : ''));
+  lines.push('— SBA Drive CRM');
+  return { subject: subject, body: lines.join('\n'), lastRange: lastRange, planRange: planRange };
+}
+
+/**
+ * Opens Outlook (or default mail app) with To / subject / body.
+ * Downloads .xlsx first so the user can attach it before Send.
+ */
+async function emailWeeklyReport() {
+  if (!workbook) {
+    showToast('Open your Excel file first', 'warning');
+    return;
+  }
+  if (!_weeklyCache) {
+    generateWeeklyReportUI(false);
+  }
+  var w = _weeklyCache;
+  if (!w) {
+    showToast('Generate the weekly report first', 'warning');
+    return;
+  }
+
+  var to = getWeeklyEmailTo();
+  var el = document.getElementById('weeklyEmailTo');
+  if (!to) {
+    showToast('Enter the recipient email in "Send to"', 'warning');
+    if (el) el.focus();
+    return;
+  }
+  // simple email check
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    showToast('Enter a valid email address', 'warning');
+    if (el) el.focus();
+    return;
+  }
+  saveWeeklyEmailTo(to);
+  if (el) el.value = to;
+
+  var content = buildWeeklyEmailContent(w);
+  if (!content) return;
+
+  // Download Excel so it's ready to attach in Outlook
+  try {
+    if (originalArrayBuffer) {
+      showToast('Downloading Excel for attachment…', 'success');
+      await downloadFile();
+    }
+  } catch (e) {
+    console.warn('[SBA] email download', e);
+  }
+
+  var mailto = 'mailto:' + encodeURIComponent(to) +
+    '?subject=' + encodeURIComponent(content.subject) +
+    '&body=' + encodeURIComponent(content.body);
+
+  // mailto length limits — keep body reasonable (already short)
+  try {
+    window.location.href = mailto;
+  } catch (e1) {
+    try {
+      var a = document.createElement('a');
+      a.href = mailto;
+      a.target = '_blank';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch (e2) {
+      showToast('Could not open mail app', 'error');
+      return;
+    }
+  }
+  showToast('Outlook opened — attach the downloaded Excel, then Send', 'success');
+}
+
+function initWeeklyEmailToField() {
+  var el = document.getElementById('weeklyEmailTo');
+  if (!el) return;
+  try {
+    var saved = localStorage.getItem('sba_weekly_email_to');
+    if (saved && !el.value) el.value = saved;
+  } catch (e) {}
+  el.addEventListener('change', function() {
+    saveWeeklyEmailTo(String(el.value || '').trim());
+  });
 }
 
 function saveWeeklyReportToExcel() {
