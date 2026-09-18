@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.21 (2026-09-18 email-page-cleanup)</title>
+<title>SBA Drive CRM v25.23 (2026-09-18 ppt-custom-range)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -379,6 +379,22 @@ body { padding-bottom: 80px; }
       <button type="button" class="filter-chip" data-ppt-period="3m" onclick="setPptPeriod('3m')">This quarter</button>
       <button type="button" class="filter-chip" data-ppt-period="6m" onclick="setPptPeriod('6m')">This half-year</button>
       <button type="button" class="filter-chip" data-ppt-period="year" onclick="setPptPeriod('year')">This calendar year</button>
+      <button type="button" class="filter-chip" data-ppt-period="custom" onclick="setPptPeriod('custom')">Custom range</button>
+    </div>
+    <div id="pptCustomRangeRow" style="display:none;margin-bottom:10px;padding:10px;background:var(--bg);border-radius:8px;">
+      <p style="font-size:12px;color:var(--text-light);margin:0 0 8px;">
+        Pick any start and end month (e.g. August → September, or Jan → August for 8 months).
+      </p>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+        <div style="flex:1;min-width:140px;">
+          <label class="form-label" for="pptFromMonth">From</label>
+          <input type="month" class="form-input" id="pptFromMonth" onchange="onPptCustomRangeChange()">
+        </div>
+        <div style="flex:1;min-width:140px;">
+          <label class="form-label" for="pptToMonth">To</label>
+          <input type="month" class="form-input" id="pptToMonth" onchange="onPptCustomRangeChange()">
+        </div>
+      </div>
     </div>
     <div style="margin:14px 0 8px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;font-weight:600;color:var(--primary);">SWOT analysis</div>
     <p style="font-size:11px;color:var(--text-light);margin:0 0 8px;">
@@ -386,7 +402,6 @@ body { padding-bottom: 80px; }
     </p>
     <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
       <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="refreshAutoSwot()">Generate / Refresh SWOT draft</button>
-      <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="copySwotAiPrompt()">Copy AI prompt</button>
     </div>
     <div class="form-group"><label class="form-label">S — Strengths</label><textarea class="form-textarea" id="swotStrengths" rows="2" placeholder="Auto-filled…"></textarea></div>
     <div class="form-group"><label class="form-label">W — Weaknesses</label><textarea class="form-textarea" id="swotWeaknesses" rows="2" placeholder="Auto-filled…"></textarea></div>
@@ -852,7 +867,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-email-page-cleanup loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-ppt-custom-range loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2146,6 +2161,34 @@ function getExecPeriodRange(mode, refDate) {
     const label = (h === 0 ? 'H1' : 'H2') + ' ' + y + ' (' + monthNames[startM] + '–' + monthNames[startM + 5] + ')';
     return { start: start, end: end, label: label, half: h + 1 };
   }
+  // Custom calendar month range (e.g. Aug–Sep, or any N months)
+  if (mode === 'custom') {
+    var fromStr = (typeof pptCustomFrom === 'string' && pptCustomFrom) ? pptCustomFrom : '';
+    var toStr = (typeof pptCustomTo === 'string' && pptCustomTo) ? pptCustomTo : '';
+    if (!fromStr || !toStr) {
+      // default: previous calendar month through current
+      var defTo = y + '-' + String(m + 1).padStart(2, '0');
+      var pm = m === 0 ? 11 : m - 1;
+      var py = m === 0 ? y - 1 : y;
+      var defFrom = py + '-' + String(pm + 1).padStart(2, '0');
+      fromStr = fromStr || defFrom;
+      toStr = toStr || defTo;
+    }
+    var fm = fromStr.match(/^(\d{4})-(\d{2})$/);
+    var tm = toStr.match(/^(\d{4})-(\d{2})$/);
+    if (!fm || !tm) return getExecPeriodRange('month', ref);
+    var fy = parseInt(fm[1], 10), fmo = parseInt(fm[2], 10) - 1;
+    var ty = parseInt(tm[1], 10), tmo = parseInt(tm[2], 10) - 1;
+    var start = new Date(fy, fmo, 1);
+    var end = endOfDay(new Date(ty, tmo + 1, 0));
+    if (end.getTime() < start.getTime()) {
+      var tmp = start; start = new Date(ty, tmo, 1); end = endOfDay(new Date(fy, fmo + 1, 0));
+      var ts = fromStr; fromStr = toStr; toStr = ts;
+    }
+    var label = monthNames[start.getMonth()] + ' ' + start.getFullYear() + ' – ' +
+      monthNames[end.getMonth()] + ' ' + end.getFullYear();
+    return { start: start, end: end, label: label, custom: true };
+  }
   return getExecPeriodRange('month', ref);
 }
 
@@ -2271,14 +2314,55 @@ function refreshExecutedSalesTable() {
 
 // ==================== POWERPOINT REPORT ====================
 let pptPeriodMode = 'month';
+let pptCustomFrom = ''; // 'YYYY-MM'
+let pptCustomTo = '';
 let pptTemplateMeta = null; // { id, name } from Drive or { name, local: true }
 let pptTemplateBuffer = null; // ArrayBuffer of .pptx template
+
+function ensurePptCustomDefaults() {
+  var ref = new Date();
+  var y = ref.getFullYear();
+  var m = ref.getMonth();
+  if (!pptCustomTo) {
+    pptCustomTo = y + '-' + String(m + 1).padStart(2, '0');
+  }
+  if (!pptCustomFrom) {
+    var pm = m === 0 ? 11 : m - 1;
+    var py = m === 0 ? y - 1 : y;
+    pptCustomFrom = py + '-' + String(pm + 1).padStart(2, '0');
+  }
+  var fromEl = document.getElementById('pptFromMonth');
+  var toEl = document.getElementById('pptToMonth');
+  if (fromEl && !fromEl.value) fromEl.value = pptCustomFrom;
+  if (toEl && !toEl.value) toEl.value = pptCustomTo;
+  if (fromEl && fromEl.value) pptCustomFrom = fromEl.value;
+  if (toEl && toEl.value) pptCustomTo = toEl.value;
+}
+
+function onPptCustomRangeChange() {
+  var fromEl = document.getElementById('pptFromMonth');
+  var toEl = document.getElementById('pptToMonth');
+  if (fromEl) pptCustomFrom = fromEl.value || pptCustomFrom;
+  if (toEl) pptCustomTo = toEl.value || pptCustomTo;
+  pptPeriodMode = 'custom';
+  document.querySelectorAll('#pptPeriodBar .filter-chip').forEach(function(btn) {
+    btn.classList.toggle('active', btn.getAttribute('data-ppt-period') === 'custom');
+  });
+  try { refreshAutoSwot(true); } catch (e) {}
+}
 
 function setPptPeriod(mode) {
   pptPeriodMode = mode || 'month';
   document.querySelectorAll('#pptPeriodBar .filter-chip').forEach(function(btn) {
     btn.classList.toggle('active', btn.getAttribute('data-ppt-period') === pptPeriodMode);
   });
+  var row = document.getElementById('pptCustomRangeRow');
+  if (row) {
+    row.style.display = (pptPeriodMode === 'custom') ? 'block' : 'none';
+  }
+  if (pptPeriodMode === 'custom') {
+    ensurePptCustomDefaults();
+  }
   // Keep SWOT draft in sync with period when user switches chips
   try { refreshAutoSwot(true); } catch (e) {}
 }
@@ -2649,6 +2733,9 @@ function buildPptPlaceholderMap(periodMode) {
   } else if ((periodMode || pptPeriodMode) === '6m') {
     period = range.label || 'Current half-year';
     periodShort = range.half ? ('H' + range.half + ' ' + (range.start && range.start.getFullYear())) : 'H';
+  } else if ((periodMode || pptPeriodMode) === 'custom') {
+    period = range.label || 'Custom range';
+    periodShort = period;
   }
 
   const map = {
