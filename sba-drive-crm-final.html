@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.15 (2026-09-18 mailto-modal)</title>
+<title>SBA Drive CRM v25.17 (2026-09-18 email-page)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -216,6 +216,7 @@ body { padding-bottom: 80px; }
     <a href="#" class="nav-link" onclick="navigate('companies')">Companies</a>
     <a href="#" class="nav-link" onclick="navigate('sheets')">Sheets</a>
     <a href="#" class="nav-link" onclick="navigate('weekly')">Weekly</a>
+    <a href="#" class="nav-link" onclick="navigate('email')">Email</a>
     <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
   </div>
   <button type="button" onclick="openModeModal()" style="margin-right:10px;padding:6px 12px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.15);color:#fff;cursor:pointer;">Mode</button>
@@ -244,10 +245,6 @@ body { padding-bottom: 80px; }
   <pre id="saveErrorDetails"></pre>
   <div class="banner-actions">
     <button class="btn btn-primary btn-sm" type="button" onclick="copySaveError()">Copy error</button>
-  <button class="nav-item" onclick="navigate('weekly')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-    Weekly
-  </button>
     <button class="btn btn-secondary btn-sm" type="button" onclick="retrySaveToDrive()">Retry save</button>
     <button class="btn btn-secondary btn-sm" type="button" onclick="hideSaveErrorBanner()">Dismiss</button>
   </div>
@@ -516,6 +513,53 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
+
+<div class="screen" id="screen-email">
+  <div class="card">
+    <div class="card-title">Email report</div>
+    <p style="font-size:13px;color:var(--text-light);margin:0 0 12px;">
+      Build a weekly email from the report dates. Each user can edit and <strong>save their own</strong> template and signature on this device.
+      Uses the last generated weekly report (open <strong>Weekly</strong> and Generate first if needed).
+    </p>
+    <label class="form-label" for="emailReportTo">Send to</label>
+    <input type="email" class="form-input" id="emailReportTo" placeholder="abraham.tilahun@sba-group.org" autocomplete="email">
+
+    <label class="form-label" for="emailReportGreeting" style="margin-top:10px;">Greeting line</label>
+    <input type="text" class="form-input" id="emailReportGreeting" placeholder="Dear Mr. Abreham,">
+
+    <label class="form-label" for="emailReportSubject" style="margin-top:10px;">Subject</label>
+    <input type="text" class="form-input" id="emailReportSubject" placeholder="Subject (auto-filled from week dates)">
+
+    <label class="form-label" for="emailReportBody" style="margin-top:10px;">Message body</label>
+    <p style="font-size:11px;color:var(--text-light);margin:0 0 6px;">
+      Placeholders: <code>{{periodStart}}</code> <code>{{periodEnd}}</code>
+      <code>{{planStart}}</code> <code>{{planEnd}}</code>
+      <code>{{lastCount}}</code> <code>{{planCount}}</code>
+    </p>
+    <textarea class="form-input" id="emailReportBody" rows="10" style="min-height:160px;font-family:inherit;line-height:1.45;"></textarea>
+
+    <label class="form-label" for="emailReportSignature" style="margin-top:10px;">Signature</label>
+    <textarea class="form-input" id="emailReportSignature" rows="8" style="min-height:120px;font-family:inherit;line-height:1.45;"></textarea>
+
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">
+      <button type="button" class="btn" onclick="refreshEmailReportFromWeekly()">Fill from weekly report</button>
+      <button type="button" class="btn btn-secondary" onclick="saveEmailReportSettings()">Save my template</button>
+      <button type="button" class="btn btn-secondary" onclick="resetEmailReportTemplate()">Reset to default</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title">Preview</div>
+    <pre id="emailReportPreview" style="white-space:pre-wrap;font-size:13px;line-height:1.45;margin:0;font-family:inherit;background:#f8f9fa;padding:12px;border-radius:8px;max-height:40vh;overflow:auto;"></pre>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
+      <a id="emailReportOwaLink" class="btn" href="#" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;">Open in Outlook on the web</a>
+      <a id="emailReportMailtoLink" class="btn btn-secondary" href="#" style="text-align:center;text-decoration:none;">Open desktop Outlook (mailto)</a>
+      <button type="button" class="btn btn-secondary" onclick="copyEmailReportToClipboard()">Copy full message</button>
+      <button type="button" class="btn btn-secondary" onclick="downloadFile(); showToast('Excel downloaded — attach in Outlook', 'success');">Download Excel to attach</button>
+    </div>
+  </div>
+</div>
+
 <div class="screen" id="screen-drive">
 
   <div class="card">
@@ -538,6 +582,9 @@ body { padding-bottom: 80px; }
   <button class="nav-item" id="navWeeklyBtn" onclick="navigate('weekly')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Weekly
   </button>
+  <button class="nav-item" onclick="navigate('email')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Email
+  </button>
   <button class="nav-item" onclick="navigate('sheets')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
   </button>
@@ -558,11 +605,18 @@ body { padding-bottom: 80px; }
       <button class="modal-close" onclick="closeModal('modalEmailWeekly')">&times;</button>
     </div>
     <div class="modal-body">
-      <p style="font-size:14px;margin:0 0 10px;">To open Outlook with the message ready, tap the button below (required by the browser).</p>
       <p id="emailWeeklySummary" style="font-size:13px;color:var(--text-light);margin:0 0 14px;"></p>
-      <a id="emailWeeklyMailtoLink" class="btn" href="#" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px;">Open in Outlook</a>
+      <p style="font-size:13px;margin:0 0 10px;"><strong>Recommended for SBA (Microsoft 365):</strong></p>
+      <a id="emailWeeklyOwaLink" class="btn" href="#" target="_blank" rel="noopener" style="display:block;text-align:center;text-decoration:none;margin-bottom:10px;">Open in Outlook on the web</a>
+      <p style="font-size:13px;margin:12px 0 8px;"><strong>Or desktop app:</strong></p>
+      <a id="emailWeeklyMailtoLink" class="btn btn-secondary" href="#" style="display:block;text-align:center;text-decoration:none;margin-bottom:8px;">Open desktop Outlook (mailto)</a>
+      <button type="button" class="btn btn-secondary" style="width:100%;margin-bottom:8px;" onclick="copyWeeklyEmailToClipboard()">Copy subject &amp; body</button>
       <button type="button" class="btn btn-secondary" style="width:100%;" onclick="downloadFile(); showToast('Excel downloaded — attach it in Outlook', 'success');">Download Excel again</button>
-      <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">After Outlook opens: attach the downloaded <code>.xlsx</code> from Downloads, then Send.</p>
+      <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">
+        1) Open Outlook (web or desktop)<br>
+        2) Attach the downloaded <code>.xlsx</code><br>
+        3) Send from your SBA account
+      </p>
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('modalEmailWeekly')">Close</button>
@@ -788,7 +842,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-mailto-modal loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-email-page loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1561,14 +1615,27 @@ function navigate(screen) {
   }
   currentScreen = screen;
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById('screen-' + screen).classList.add('active');
+  var scr = document.getElementById('screen-' + screen);
+  if (scr) scr.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  const titles = {dashboard:'Dashboard',companies:'Companies',edit:'Edit Company',sheets:'Excel Sheets',drive:'Google Drive'};
+  document.querySelectorAll('.nav-link').forEach(function(n) { n.classList.remove('active'); });
+  const titles = {
+    dashboard: 'Dashboard',
+    companies: 'Companies',
+    edit: 'Edit Company',
+    sheets: 'Excel Sheets',
+    weekly: 'Weekly',
+    email: 'Email report',
+    drive: 'Google Drive'
+  };
   const pt = document.getElementById('pageTitle');
   if (pt) pt.textContent = titles[screen] || 'SBA Drive';
   if (screen === 'companies') renderCompanies();
   if (screen === 'sheets') renderSheets();
   if (screen === 'drive') listDriveFiles();
+  if (screen === 'email') {
+    try { initEmailReportPage(); } catch (e) { console.warn(e); }
+  }
   window.scrollTo(0, 0);
 }
 
@@ -6043,6 +6110,244 @@ function buildWeeklyEmailContent(w) {
  * Opens Outlook (or default mail app) with To / subject / body.
  * Downloads .xlsx first so the user can attach it before Send.
  */
+
+var EMAIL_REPORT_STORAGE = 'sba_email_report_settings_v1';
+
+function defaultEmailReportSettings() {
+  return {
+    to: 'abraham.tilahun@sba-group.org',
+    greeting: 'Dear Mr. Abreham,',
+    subject: 'SBA Weekly activity report — {{periodStart}} – {{periodEnd}}',
+    body:
+      'Please find attached Excel file:\n' +
+      'The weekly activity report for the period {{periodStart}} – {{periodEnd}}.\n\n' +
+      'Please let me know if you need any clarification or additional information.',
+    signature:
+      'Best regards,\n' +
+      'Yosef Getu\n' +
+      'MI Field Engineer\n\n' +
+      'Mob :  + 251-923-282-003\n' +
+      'Office: + 251-118-228-879\n' +
+      'Address: SBA Ethiopia Installation and Maintenance PLC. No. 101 SIHAM Building,\n' +
+      '         1st Floor, Ghana Street, Around Bole Atlas, Addis Ababa, Ethiopia\n' +
+      'Email : yosef.getu@sba-group.org'
+  };
+}
+
+function loadEmailReportSettings() {
+  try {
+    var raw = localStorage.getItem(EMAIL_REPORT_STORAGE);
+    if (!raw) return defaultEmailReportSettings();
+    var o = JSON.parse(raw);
+    var d = defaultEmailReportSettings();
+    return {
+      to: o.to != null ? o.to : d.to,
+      greeting: o.greeting != null ? o.greeting : d.greeting,
+      subject: o.subject != null ? o.subject : d.subject,
+      body: o.body != null ? o.body : d.body,
+      signature: o.signature != null ? o.signature : d.signature
+    };
+  } catch (e) {
+    return defaultEmailReportSettings();
+  }
+}
+
+function saveEmailReportSettings() {
+  var s = {
+    to: (document.getElementById('emailReportTo') || {}).value || '',
+    greeting: (document.getElementById('emailReportGreeting') || {}).value || '',
+    subject: (document.getElementById('emailReportSubject') || {}).value || '',
+    body: (document.getElementById('emailReportBody') || {}).value || '',
+    signature: (document.getElementById('emailReportSignature') || {}).value || ''
+  };
+  try {
+    localStorage.setItem(EMAIL_REPORT_STORAGE, JSON.stringify(s));
+    showToast('Template saved on this device', 'success');
+  } catch (e) {
+    showToast('Could not save template', 'error');
+  }
+  // keep weekly field in sync
+  try {
+    var w = document.getElementById('weeklyEmailTo');
+    if (w) w.value = s.to;
+    saveWeeklyEmailTo(s.to);
+  } catch (e2) {}
+  updateEmailReportPreview();
+}
+
+function resetEmailReportTemplate() {
+  if (!confirm('Reset greeting, subject, body and signature to the default SBA template?')) return;
+  var d = defaultEmailReportSettings();
+  var curTo = (document.getElementById('emailReportTo') || {}).value;
+  applyEmailReportSettingsToForm({
+    to: curTo || d.to,
+    greeting: d.greeting,
+    subject: d.subject,
+    body: d.body,
+    signature: d.signature
+  });
+  updateEmailReportPreview();
+  showToast('Default template restored — tap Save my template to keep it', 'success');
+}
+
+function applyEmailReportSettingsToForm(s) {
+  var set = function(id, v) {
+    var el = document.getElementById(id);
+    if (el) el.value = v != null ? v : '';
+  };
+  set('emailReportTo', s.to);
+  set('emailReportGreeting', s.greeting);
+  set('emailReportSubject', s.subject);
+  set('emailReportBody', s.body);
+  set('emailReportSignature', s.signature);
+}
+
+function formatEmailPeriodDate(d) {
+  if (!d) return '';
+  var months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var day = d.getDate();
+  var mon = months[d.getMonth()];
+  var y = d.getFullYear();
+  return day + '/' + mon + '/' + y;
+}
+
+function getEmailReportPlaceholders() {
+  var w = _weeklyCache;
+  if (!w) {
+    try { if (workbook) generateWeeklyReportUI(false); } catch (e) {}
+    w = _weeklyCache;
+  }
+  if (!w) {
+    return {
+      periodStart: '', periodEnd: '', planStart: '', planEnd: '',
+      lastCount: '0', planCount: '0'
+    };
+  }
+  return {
+    periodStart: formatEmailPeriodDate(w.lastFri),
+    periodEnd: formatEmailPeriodDate(w.lastThu),
+    planStart: formatEmailPeriodDate(w.planFri),
+    planEnd: formatEmailPeriodDate(w.planThu),
+    lastCount: String(w.lastWeek ? w.lastWeek.length : 0),
+    planCount: String(w.nextWeek ? w.nextWeek.length : 0)
+  };
+}
+
+function applyEmailPlaceholders(text, ph) {
+  var s = String(text || '');
+  Object.keys(ph).forEach(function(k) {
+    s = s.split('{{' + k + '}}').join(ph[k] != null ? ph[k] : '');
+  });
+  return s;
+}
+
+function buildEmailReportMessage() {
+  var ph = getEmailReportPlaceholders();
+  var greeting = (document.getElementById('emailReportGreeting') || {}).value || '';
+  var body = applyEmailPlaceholders((document.getElementById('emailReportBody') || {}).value || '', ph);
+  var sig = (document.getElementById('emailReportSignature') || {}).value || '';
+  var subjectTpl = (document.getElementById('emailReportSubject') || {}).value || '';
+  var subject = applyEmailPlaceholders(subjectTpl, ph);
+  var parts = [];
+  if (greeting.trim()) parts.push(greeting.trim());
+  parts.push('');
+  if (body.trim()) parts.push(body.trim());
+  parts.push('');
+  if (sig.trim()) parts.push(sig.trim());
+  return {
+    to: ((document.getElementById('emailReportTo') || {}).value || '').trim(),
+    subject: subject,
+    body: parts.join('\n'),
+    ph: ph
+  };
+}
+
+function updateEmailReportPreview() {
+  var msg = buildEmailReportMessage();
+  var pre = document.getElementById('emailReportPreview');
+  if (pre) {
+    pre.textContent = 'To: ' + (msg.to || '(enter address)') + '\nSubject: ' + msg.subject + '\n\n' + msg.body;
+  }
+  var mailto = 'mailto:' + (msg.to || '') +
+    '?subject=' + encodeURIComponent(msg.subject) +
+    '&body=' + encodeURIComponent(msg.body);
+  var owa = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(msg.to || '') +
+    '&subject=' + encodeURIComponent(msg.subject) +
+    '&body=' + encodeURIComponent(msg.body);
+  var m = document.getElementById('emailReportMailtoLink');
+  if (m) { m.setAttribute('href', mailto); m.removeAttribute('target'); }
+  var o = document.getElementById('emailReportOwaLink');
+  if (o) {
+    o.setAttribute('href', owa);
+    o.setAttribute('target', '_blank');
+    o.setAttribute('rel', 'noopener');
+  }
+  _weeklyEmailClipboard = { to: msg.to, subject: msg.subject, body: msg.body };
+}
+
+function refreshEmailReportFromWeekly() {
+  if (!workbook) {
+    showToast('Open your Excel file first', 'warning');
+    return;
+  }
+  if (!_weeklyCache) {
+    try { generateWeeklyReportUI(false); } catch (e) {}
+  }
+  if (!_weeklyCache) {
+    showToast('Could not build weekly dates — open Weekly and Generate first', 'warning');
+    return;
+  }
+  var ph = getEmailReportPlaceholders();
+  var subEl = document.getElementById('emailReportSubject');
+  if (subEl && (!subEl.value || subEl.value.indexOf('{{') !== -1)) {
+    // keep template; preview applies placeholders
+  }
+  updateEmailReportPreview();
+  showToast('Preview updated for ' + ph.periodStart + ' – ' + ph.periodEnd, 'success');
+}
+
+function initEmailReportPage() {
+  var s = loadEmailReportSettings();
+  // Prefer weekly field if user just typed there
+  try {
+    var wt = getWeeklyEmailTo();
+    if (wt) s.to = wt;
+  } catch (e) {}
+  applyEmailReportSettingsToForm(s);
+  ['emailReportTo','emailReportGreeting','emailReportSubject','emailReportBody','emailReportSignature'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el && !el._sbaEmailBound) {
+      el._sbaEmailBound = true;
+      el.addEventListener('input', function() { updateEmailReportPreview(); });
+    }
+  });
+  updateEmailReportPreview();
+}
+
+async function copyEmailReportToClipboard() {
+  updateEmailReportPreview();
+  var msg = buildEmailReportMessage();
+  var text = 'To: ' + msg.to + '\nSubject: ' + msg.subject + '\n\n' + msg.body;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showToast('Copied — paste into Outlook if needed', 'success');
+  } catch (e) {
+    showToast('Could not copy', 'error');
+  }
+}
+
+
+var _weeklyEmailClipboard = null;
+
 async function emailWeeklyReport() {
   if (!workbook) {
     showToast('Open your Excel file first', 'warning');
@@ -6074,13 +6379,17 @@ async function emailWeeklyReport() {
 
   var content = buildWeeklyEmailContent(w);
   if (!content) return;
+  _weeklyEmailClipboard = { to: to, subject: content.subject, body: content.body };
 
-  // Do NOT encode the email local-part in the mailto path (breaks some Outlook setups)
   var mailto = 'mailto:' + to +
     '?subject=' + encodeURIComponent(content.subject) +
     '&body=' + encodeURIComponent(content.body);
 
-  // Always show a panel with a real <a href="mailto:"> — second click always works in Chrome
+  // Outlook on the web (Microsoft 365) — works when desktop mailto is blocked
+  var owa = 'https://outlook.office.com/mail/deeplink/compose?to=' + encodeURIComponent(to) +
+    '&subject=' + encodeURIComponent(content.subject) +
+    '&body=' + encodeURIComponent(content.body);
+
   var sum = document.getElementById('emailWeeklySummary');
   if (sum) {
     sum.textContent = 'To: ' + to + ' · Job done ' + content.lastRange + ' · Plan ' + content.planRange;
@@ -6088,24 +6397,16 @@ async function emailWeeklyReport() {
   var link = document.getElementById('emailWeeklyMailtoLink');
   if (link) {
     link.setAttribute('href', mailto);
-    // Remove target=_blank — mailto should be handled by OS, not a tab
     link.removeAttribute('target');
+  }
+  var owaLink = document.getElementById('emailWeeklyOwaLink');
+  if (owaLink) {
+    owaLink.setAttribute('href', owa);
+    owaLink.setAttribute('target', '_blank');
+    owaLink.setAttribute('rel', 'noopener');
   }
   openModal('modalEmailWeekly');
 
-  // Try automatic open once (may be blocked on GitHub Pages / managed Chrome)
-  try {
-    var a = document.createElement('a');
-    a.href = mailto;
-    a.rel = 'noopener';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-  } catch (e) {
-    console.warn('[SBA] auto mailto', e);
-  }
-
-  // Download Excel for attachment
   try {
     if (originalArrayBuffer) {
       setTimeout(function() {
@@ -6114,7 +6415,31 @@ async function emailWeeklyReport() {
     }
   } catch (e) {}
 
-  showToast('Tap “Open in Outlook” if mail did not open, then attach the Excel', 'success');
+  showToast('Use “Outlook on the web” if the desktop app does not open', 'success');
+}
+
+async function copyWeeklyEmailToClipboard() {
+  var c = _weeklyEmailClipboard;
+  if (!c) {
+    showToast('Open Email weekly report first', 'warning');
+    return;
+  }
+  var text = 'To: ' + c.to + '\nSubject: ' + c.subject + '\n\n' + c.body;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showToast('Copied — paste into a new Outlook message', 'success');
+  } catch (e) {
+    showToast('Could not copy — select text manually from the weekly screen', 'error');
+  }
 }
 
 function initWeeklyEmailToField() {
