@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.26 (2026-09-18 this-week-fri-thu)</title>
+<title>SBA Drive CRM v25.29 (2026-09-18 silent-only)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -867,7 +867,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-this-week-fri-thu loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-silent-only loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -6060,9 +6060,26 @@ function renderWeeklyTable(rows, cols) {
   return h;
 }
 
-function generateWeeklyReportUI(forceFrozen) {
+/** Refresh in-app Weekly + Email plan tables after follow-up date changes (no Generate tap needed). */
+function refreshWeeklyViewsAfterFollowUpChange() {
+  if (!workbook) return;
+  try {
+    var forceFrozen = false;
+    if (_weeklyCache && _weeklyCache.frozen === true) forceFrozen = true;
+    generateWeeklyReportUI(forceFrozen, true);
+    if (document.getElementById('emailLastWeekTable')) {
+      try { renderEmailPageWeeklyTables(); } catch (e1) {}
+      try { updateEmailReportPreview(); } catch (e2) {}
+    }
+  } catch (e) {
+    console.warn('[SBA] refreshWeeklyViewsAfterFollowUpChange', e);
+  }
+}
+
+function generateWeeklyReportUI(forceFrozen, silent) {
   if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
   forceFrozen = !!forceFrozen;
+  silent = !!silent;
   _weeklyCache = computeWeeklyReports(new Date(), { forceFrozen: forceFrozen });
   const w = _weeklyCache;
   const overdueCount = w.nextWeek.filter(function(r) { return r._overdue; }).length;
@@ -6164,32 +6181,37 @@ function openWeeklyPreviewModal(w, savedOk) {
   const meta = document.getElementById('weeklyPreviewMeta');
   if (meta) {
     meta.innerHTML =
-      '<div><strong>Last week:</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) +
-        ' — <strong>' + w.lastWeek.length + '</strong> contacts</div>' +
-      '<div><strong>Plan week:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) +
-        ' — <strong>' + w.nextWeek.length + '</strong> items</div>' +
+      '<div><strong>Last week (job done):</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) +
+        ' — <strong>' + (w.lastWeek && w.lastWeek.length) + '</strong> contacts</div>' +
+      '<div><strong>Next week plan:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) +
+        ' — <strong>' + (w.nextWeek && w.nextWeek.length) + '</strong> items</div>' +
       '<div style="margin-top:4px;color:var(--text-light);">' +
         (savedOk ? 'Saved to Drive. ' : 'Not saved to Drive. ') +
-        'End-of-week (frozen) · ' + w.generatedAt.toLocaleString() +
+        (w.frozen ? 'Frozen / end-of-week windows' : 'Normal mid-week windows') +
+        ' · ' + (w.generatedAt ? w.generatedAt.toLocaleString() : '') +
       '</div>';
   }
+  // Same columns as the Weekly page tables
   const lastCols = [
     { key: 'company', label: 'Company' },
+    { key: 'industry', label: 'Industry' },
+    { key: 'contact_person', label: 'Contact' },
     { key: 'last_contact_date', label: 'Last Contact' },
     { key: 'sales_stage', label: 'Stage' },
     { key: 'notes', label: 'Summary' }
   ];
   const nextCols = [
     { key: 'company', label: 'Company' },
-    { key: 'next_follow_up_date', label: 'Follow-up' },
-    { key: 'sales_stage', label: 'Stage' },
-    { key: '_flag', label: 'Flag' }
+    { key: 'industry', label: 'Industry' },
+    { key: 'contact_person', label: 'Contact' },
+    { key: 'current_supplier', label: 'Supplier' },
+    { key: 'next_follow_up_date', label: 'Next Follow-up' },
+    { key: 'sales_stage', label: 'Stage' }
   ];
-  w.nextWeek.forEach(function(r) { r._flag = r._overdue ? 'OVERDUE' : ''; });
   const pl = document.getElementById('weeklyPreviewLast');
   const pn = document.getElementById('weeklyPreviewNext');
-  if (pl) pl.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
-  if (pn) pn.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
+  if (pl) pl.innerHTML = renderWeeklyTable(w.lastWeek || [], lastCols);
+  if (pn) pn.innerHTML = renderWeeklyTable(w.nextWeek || [], nextCols);
   openModal('modalWeeklyPreview');
 }
 
