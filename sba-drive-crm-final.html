@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.13 (2026-09-18 email-weekly)</title>
+<title>SBA Drive CRM v25.14 (2026-09-18 mailto-fix)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -768,7 +768,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-email-weekly loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-mailto-fix loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -6044,7 +6044,6 @@ async function emailWeeklyReport() {
     if (el) el.focus();
     return;
   }
-  // simple email check
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
     showToast('Enter a valid email address', 'warning');
     if (el) el.focus();
@@ -6056,37 +6055,55 @@ async function emailWeeklyReport() {
   var content = buildWeeklyEmailContent(w);
   if (!content) return;
 
-  // Download Excel so it's ready to attach in Outlook
-  try {
-    if (originalArrayBuffer) {
-      showToast('Downloading Excel for attachment…', 'success');
-      await downloadFile();
-    }
-  } catch (e) {
-    console.warn('[SBA] email download', e);
-  }
-
+  // IMPORTANT: open mailto in the same user-gesture turn (before any await).
+  // Browsers block mail apps if we await download first.
   var mailto = 'mailto:' + encodeURIComponent(to) +
     '?subject=' + encodeURIComponent(content.subject) +
     '&body=' + encodeURIComponent(content.body);
 
-  // mailto length limits — keep body reasonable (already short)
+  var opened = false;
   try {
-    window.location.href = mailto;
+    var a = document.createElement('a');
+    a.href = mailto;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    opened = true;
   } catch (e1) {
+    console.warn('[SBA] mailto a.click', e1);
+  }
+  if (!opened) {
     try {
-      var a = document.createElement('a');
-      a.href = mailto;
-      a.target = '_blank';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+      window.location.href = mailto;
+      opened = true;
     } catch (e2) {
-      showToast('Could not open mail app', 'error');
-      return;
+      console.warn('[SBA] mailto location', e2);
     }
   }
-  showToast('Outlook opened — attach the downloaded Excel, then Send', 'success');
+  if (!opened) {
+    try {
+      window.open(mailto, '_blank');
+      opened = true;
+    } catch (e3) {}
+  }
+
+  if (!opened) {
+    showToast('Could not open Outlook. Check that mailto/Outlook is the default mail app.', 'error');
+  } else {
+    showToast('Outlook should open — then attach the Excel from Downloads and Send', 'success');
+  }
+
+  // Download Excel after opening mail (attachment is manual)
+  try {
+    if (originalArrayBuffer) {
+      setTimeout(function() {
+        downloadFile().catch(function(e) { console.warn('[SBA] email download', e); });
+      }, 400);
+    }
+  } catch (e) {
+    console.warn('[SBA] email download schedule', e);
+  }
 }
 
 function initWeeklyEmailToField() {
