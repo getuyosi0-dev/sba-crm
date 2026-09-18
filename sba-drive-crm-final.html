@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.20 (2026-09-18 download-week-suffix)</title>
+<title>SBA Drive CRM v25.21 (2026-09-18 email-page-cleanup)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -494,14 +494,9 @@ body { padding-bottom: 80px; }
       <strong>Frozen + Save + Preview:</strong> end-of-week windows → save to Drive → preview → optional Download Excel.
     </p>
     <button class="btn btn-secondary" style="margin-top:8px;" onclick="saveWeeklyReportToExcel()">Save Report to Excel</button>
-    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);">
-      <label class="form-label" for="weeklyEmailTo">Send to (email)</label>
-      <input type="email" class="form-input" id="weeklyEmailTo" placeholder="boss@sba-group.org" autocomplete="email" style="margin-bottom:8px;">
-      <button class="btn btn-secondary" type="button" onclick="emailWeeklyReport()">Email weekly report</button>
-      <p style="font-size:11px;color:var(--text-light);margin:8px 0 0;">
-        Opens Outlook with To, subject, and body filled (week dates + summary). The app also downloads the Excel so you can attach it before Send.
-      </p>
-    </div>
+    <p style="font-size:11px;color:var(--text-light);margin:10px 0 0;">
+      To email the report, open the <strong>Email</strong> tab.
+    </p>
   </div>
   <div class="card" style="margin-top:12px;">
     <div class="card-title" id="lastWeekTitle">Last Week Report</div>
@@ -518,46 +513,61 @@ body { padding-bottom: 80px; }
   <div class="card">
     <div class="card-title">Email report</div>
     <p style="font-size:13px;color:var(--text-light);margin:0 0 12px;">
-      Build a weekly email from the report dates. Each user can edit and <strong>save their own</strong> template and signature on this device.
-      Uses the last generated weekly report (open <strong>Weekly</strong> and Generate first if needed).
+      Generate the end-of-week report, review last week / next week, then open Outlook with your message.
+      Signature comes from <strong>Outlook</strong> (not this app). Template is saved on this device per user.
     </p>
+    <div id="emailWeeklyMeta" style="font-size:13px;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;">
+      Generate a report to see week dates.
+    </div>
+    <button type="button" class="btn" onclick="emailPageGenerateFrozen()">Generate as end-of-week (frozen)</button>
+    <button type="button" class="btn btn-secondary" style="margin-top:8px;" onclick="emailPageGenerateNormal()">Generate / refresh (normal week rules)</button>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title" id="emailLastWeekTitle">Last week — job done</div>
+    <div id="emailLastWeekTable" style="overflow-x:auto;font-size:13px;"></div>
+  </div>
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title" id="emailNextWeekTitle">Next week plan</div>
+    <div id="emailNextWeekTable" style="overflow-x:auto;font-size:13px;"></div>
+  </div>
+
+  <div class="card" style="margin-top:12px;">
+    <div class="card-title">Message</div>
     <label class="form-label" for="emailReportTo">Send to</label>
     <input type="email" class="form-input" id="emailReportTo" placeholder="abraham.tilahun@sba-group.org" autocomplete="email">
 
-    <label class="form-label" for="emailReportGreeting" style="margin-top:10px;">Greeting line</label>
+    <label class="form-label" for="emailReportGreeting" style="margin-top:10px;">Greeting</label>
     <input type="text" class="form-input" id="emailReportGreeting" placeholder="Dear Mr. Abreham,">
 
     <label class="form-label" for="emailReportSubject" style="margin-top:10px;">Subject</label>
-    <input type="text" class="form-input" id="emailReportSubject" placeholder="Subject (auto-filled from week dates)">
+    <input type="text" class="form-input" id="emailReportSubject" placeholder="Subject">
 
-    <label class="form-label" for="emailReportBody" style="margin-top:10px;">Message body</label>
+    <label class="form-label" for="emailReportBody" style="margin-top:10px;">Body</label>
     <p style="font-size:11px;color:var(--text-light);margin:0 0 6px;">
       Placeholders: <code>{{periodStart}}</code> <code>{{periodEnd}}</code>
       <code>{{planStart}}</code> <code>{{planEnd}}</code>
       <code>{{lastCount}}</code> <code>{{planCount}}</code>
     </p>
-    <textarea class="form-input" id="emailReportBody" rows="10" style="min-height:160px;font-family:inherit;line-height:1.45;"></textarea>
+    <textarea class="form-input" id="emailReportBody" rows="8" style="min-height:140px;font-family:inherit;line-height:1.45;"></textarea>
 
-    <p style="font-size:12px;color:var(--text-light);margin:12px 0 0;">
-      Signature is <strong>not</strong> included here — use your Outlook signature (logo, colours, SBA block).
-    </p>
-
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">
-      <button type="button" class="btn" onclick="refreshEmailReportFromWeekly()">Fill from weekly report</button>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px;">
       <button type="button" class="btn btn-secondary" onclick="saveEmailReportSettings()">Save my template</button>
-      <button type="button" class="btn btn-secondary" onclick="resetEmailReportTemplate()">Reset to default</button>
+      <button type="button" class="btn btn-secondary" onclick="resetEmailReportTemplate()">Reset template</button>
     </div>
   </div>
 
   <div class="card" style="margin-top:12px;">
-    <div class="card-title">Preview</div>
-    <pre id="emailReportPreview" style="white-space:pre-wrap;font-size:13px;line-height:1.45;margin:0;font-family:inherit;background:#f8f9fa;padding:12px;border-radius:8px;max-height:40vh;overflow:auto;"></pre>
+    <div class="card-title">Preview &amp; send</div>
+    <pre id="emailReportPreview" style="white-space:pre-wrap;font-size:13px;line-height:1.45;margin:0;font-family:inherit;background:#f8f9fa;padding:12px;border-radius:8px;max-height:28vh;overflow:auto;"></pre>
     <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;">
       <a id="emailReportOwaLink" class="btn" href="#" target="_blank" rel="noopener" style="text-align:center;text-decoration:none;">Open in Outlook on the web</a>
-      <a id="emailReportMailtoLink" class="btn btn-secondary" href="#" style="text-align:center;text-decoration:none;">Open desktop Outlook (mailto)</a>
-      <button type="button" class="btn btn-secondary" onclick="copyEmailReportToClipboard()">Copy full message</button>
-      <button type="button" class="btn btn-secondary" onclick="downloadFile(); showToast('Excel downloaded — attach in Outlook', 'success');">Download Excel to attach</button>
+      <button type="button" class="btn btn-secondary" onclick="downloadFile();">Download Excel to attach</button>
+      <button type="button" class="btn btn-secondary" onclick="copyEmailReportToClipboard()">Copy message text</button>
     </div>
+    <p style="font-size:11px;color:var(--text-light);margin:10px 0 0;">
+      Outlook web is recommended on company PCs. Attach the downloaded Excel, then Send (your Outlook signature applies).
+    </p>
   </div>
 </div>
 
@@ -632,7 +642,6 @@ body { padding-bottom: 80px; }
       <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap;">
         <button type="button" class="btn btn-secondary btn-sm" style="width:auto;padding:8px 14px;" onclick="closeModal('modalWeeklyPreview')">Close</button>
         <button type="button" class="btn btn-sm" style="width:auto;padding:8px 14px;" onclick="confirmWeeklyPreviewDownload()">Download Excel</button>
-        <button type="button" class="btn btn-secondary btn-sm" style="width:auto;padding:8px 14px;" onclick="emailWeeklyReport()">Email</button>
         <button class="modal-close" onclick="closeModal('modalWeeklyPreview')" aria-label="Close">&times;</button>
       </div>
     </div>
@@ -843,7 +852,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-download-week-suffix loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-18-email-page-cleanup loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -6086,11 +6095,16 @@ async function confirmWeeklyPreviewDownload() {
 }
 
 function getWeeklyEmailTo() {
-  var el = document.getElementById('weeklyEmailTo');
+  var el = document.getElementById('emailReportTo') || document.getElementById('weeklyEmailTo');
   var v = el ? String(el.value || '').trim() : '';
   if (!v) {
+    try {
+      var s = loadEmailReportSettings();
+      if (s && s.to) v = String(s.to).trim();
+    } catch (e) {}
+  }
+  if (!v) {
     try { v = String(localStorage.getItem('sba_weekly_email_to') || '').trim(); } catch (e) {}
-    if (v && el) el.value = v;
   }
   return v;
 }
@@ -6315,21 +6329,78 @@ function refreshEmailReportFromWeekly() {
   showToast('Preview updated for ' + ph.periodStart + ' – ' + ph.periodEnd, 'success');
 }
 
+function renderEmailPageWeeklyTables() {
+  var w = _weeklyCache;
+  var meta = document.getElementById('emailWeeklyMeta');
+  var lt = document.getElementById('emailLastWeekTitle');
+  var nt = document.getElementById('emailNextWeekTitle');
+  var lb = document.getElementById('emailLastWeekTable');
+  var nb = document.getElementById('emailNextWeekTable');
+  if (!w) {
+    if (meta) meta.textContent = 'Generate a report to see week dates and company lists.';
+    if (lb) lb.innerHTML = '<p style="color:var(--text-light);">No data yet.</p>';
+    if (nb) nb.innerHTML = '<p style="color:var(--text-light);">No data yet.</p>';
+    return;
+  }
+  var overdueCount = (w.nextWeek || []).filter(function(r) { return r._overdue; }).length;
+  if (meta) {
+    meta.innerHTML =
+      '<div><strong>Last week (job done):</strong> ' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) +
+        ' — <strong>' + w.lastWeek.length + '</strong> contacts</div>' +
+      '<div><strong>Plan week:</strong> ' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) +
+        ' — <strong>' + w.nextWeek.length + '</strong> items' +
+        (overdueCount ? ' <span style="color:var(--danger);">(' + overdueCount + ' overdue)</span>' : '') +
+        '</div>' +
+      '<div><strong>Mode:</strong> ' + (w.frozen ? 'End-of-week (frozen)' : 'Normal (before Thu 18:00 rules)') + '</div>';
+  }
+  if (lt) lt.textContent = 'Last week — job done (' + fmtYMD(w.lastFri) + ' → ' + fmtYMD(w.lastThu) + ')';
+  if (nt) nt.textContent = 'Next week plan (' + fmtYMD(w.planFri) + ' → ' + fmtYMD(w.planThu) + ')';
+  var lastCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'last_contact_date', label: 'Last Contact' },
+    { key: 'sales_stage', label: 'Stage' },
+    { key: 'notes', label: 'Summary' }
+  ];
+  var nextCols = [
+    { key: 'company', label: 'Company' },
+    { key: 'next_follow_up_date', label: 'Follow-up' },
+    { key: 'sales_stage', label: 'Stage' },
+    { key: '_flag', label: 'Flag' }
+  ];
+  (w.nextWeek || []).forEach(function(r) { r._flag = r._overdue ? 'OVERDUE' : ''; });
+  if (lb) lb.innerHTML = renderWeeklyTable(w.lastWeek, lastCols);
+  if (nb) nb.innerHTML = renderWeeklyTable(w.nextWeek, nextCols);
+}
+
+function emailPageGenerateFrozen() {
+  if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
+  generateWeeklyReportUI(true);
+  renderEmailPageWeeklyTables();
+  updateEmailReportPreview();
+  showToast('End-of-week report ready on Email page', 'success');
+}
+
+function emailPageGenerateNormal() {
+  if (!workbook) { showToast('Open your Excel file first', 'warning'); return; }
+  generateWeeklyReportUI(false);
+  renderEmailPageWeeklyTables();
+  updateEmailReportPreview();
+}
+
 function initEmailReportPage() {
   var s = loadEmailReportSettings();
-  // Prefer weekly field if user just typed there
-  try {
-    var wt = getWeeklyEmailTo();
-    if (wt) s.to = wt;
-  } catch (e) {}
   applyEmailReportSettingsToForm(s);
-  ['emailReportTo','emailReportGreeting','emailReportSubject','emailReportBody','emailReportSignature'].forEach(function(id) {
+  ['emailReportTo','emailReportGreeting','emailReportSubject','emailReportBody'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el && !el._sbaEmailBound) {
       el._sbaEmailBound = true;
       el.addEventListener('input', function() { updateEmailReportPreview(); });
     }
   });
+  if (workbook && !_weeklyCache) {
+    try { generateWeeklyReportUI(false); } catch (e) {}
+  }
+  renderEmailPageWeeklyTables();
   updateEmailReportPreview();
 }
 
