@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.29 (2026-09-18 silent-only)</title>
+<title>SBA Drive CRM v25.30 (2026-09-21 job-done-dashboard)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -318,15 +318,16 @@ body { padding-bottom: 80px; }
       <button type="button" class="btn btn-secondary btn-sm" onclick="renderFollowUpTasks()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
     <p style="font-size:12px;color:var(--text-light);margin:0 0 12px;">
-      Overdue and <strong>this SBA week</strong> (Friday → Thursday, same as Weekly page).
-      <strong>Job done</strong> = visited/called (Last Contact = today).
-      <strong>Postpone</strong> = push Next Follow-up (+1 / +3 / +7 days or pick a date) without marking the visit done.
-      Saves to Drive automatically.
+      <strong>Overdue</strong> and <strong>this week plan</strong> (next follow-ups in Fri → Thu).
+      <strong>This week — job done</strong> = companies with Last Contact in this same Fri → Thu week.
+      Use <strong>Job done</strong> / <strong>Postpone</strong> on plan items. Saves to Drive automatically.
     </p>
     <div style="font-size:13px;font-weight:600;color:var(--danger);margin-bottom:6px;">Overdue</div>
     <div id="overdueFollowUpList" style="margin-bottom:14px;"></div>
-    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:6px;" data-followup-week-title>This week (Fri → Thu)</div>
-    <div id="thisWeekFollowUpList"></div>
+    <div style="font-size:13px;font-weight:600;color:var(--primary);margin-bottom:6px;" data-followup-week-title>This week — plan (Fri → Thu)</div>
+    <div id="thisWeekFollowUpList" style="margin-bottom:14px;"></div>
+    <div style="font-size:13px;font-weight:600;color:var(--success, #2e7d32);margin-bottom:6px;" data-jobdone-week-title>This week — job done</div>
+    <div id="thisWeekJobDoneList"></div>
   </div>
 
   <div class="card" id="top10Card" style="display:none;margin-bottom:12px;">
@@ -867,7 +868,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-18-silent-only loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-job-done-dashboard loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -3074,12 +3075,12 @@ function isClosedStage(stage) {
  *  (the Fri→Thu cycle that contains today), not a rolling 7 days.
  */
 function getFollowUpTaskLists(companies) {
-  const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
+  const all = (companies || getCompaniesFromWorkbook()).filter(function(c) {
     return c.name && String(c.name).trim()
       && !/^(legend|notes?)$/i.test(String(c.name).trim())
-      && String(c.name).indexOf('——') !== 0
-      && !isClosedStage(c.sales_stage);
+      && String(c.name).indexOf('——') !== 0;
   });
+  const list = all.filter(function(c) { return !isClosedStage(c.sales_stage); });
   const today = new Date();
   const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
   // Same helpers as computeWeeklyReports
@@ -3089,29 +3090,60 @@ function getFollowUpTaskLists(companies) {
   const weekEndUTC = Date.UTC(thisThu.getFullYear(), thisThu.getMonth(), thisThu.getDate());
   const overdue = [];
   const thisWeek = [];
+  const jobDone = [];
   list.forEach(function(c) {
     const fu = excelSerialToDate(c.next_follow_up_date);
-    if (!fu) return;
-    const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
-    const row = { c: c, fu: fu, fuUTC: fuUTC };
-    if (fuUTC < todayUTC) {
-      overdue.push(row);
-    } else if (fuUTC >= weekStartUTC && fuUTC <= weekEndUTC) {
-      // Remaining follow-ups in this Fri→Thu week (including today)
-      thisWeek.push(row);
+    if (fu) {
+      const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+      const row = { c: c, fu: fu, fuUTC: fuUTC };
+      if (fuUTC < todayUTC) {
+        overdue.push(row);
+      } else if (fuUTC >= weekStartUTC && fuUTC <= weekEndUTC) {
+        thisWeek.push(row);
+      }
+    }
+  });
+  // Job done: any company with Last Contact in this Fri→Thu (including Won/Lost)
+  all.forEach(function(c) {
+    const lc = excelSerialToDate(c.last_contact_date);
+    if (lc) {
+      const lcUTC = Date.UTC(lc.getUTCFullYear(), lc.getUTCMonth(), lc.getUTCDate());
+      if (lcUTC >= weekStartUTC && lcUTC <= weekEndUTC) {
+        jobDone.push({ c: c, lc: lc, lcUTC: lcUTC });
+      }
     }
   });
   overdue.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
   thisWeek.sort(function(a, b) { return a.fuUTC - b.fuUTC; });
+  jobDone.sort(function(a, b) { return b.lcUTC - a.lcUTC; });
   return {
     overdue: overdue,
     thisWeek: thisWeek,
+    jobDone: jobDone,
     todayUTC: todayUTC,
     weekStartUTC: weekStartUTC,
     weekEndUTC: weekEndUTC,
     thisFri: thisFri,
     thisThu: thisThu
   };
+}
+
+function formatJobDoneTaskRow(item) {
+  const c = item.c;
+  const dateStr = (typeof formatDateDDMMMYYYY === 'function')
+    ? (formatDateDDMMMYYYY(item.lc) || ymdPad(item.lc.getUTCFullYear(), item.lc.getUTCMonth() + 1, item.lc.getUTCDate()))
+    : ymdPad(item.lc.getUTCFullYear(), item.lc.getUTCMonth() + 1, item.lc.getUTCDate());
+  const stage = escapeHtml(String(c.sales_stage || ''));
+  const name = escapeHtml(String(c.name || ''));
+  const sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+  const rowIndex = c._rowIndex;
+  return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 8px;margin-bottom:8px;background:var(--bg);border-radius:8px;border-left:4px solid var(--success, #2e7d32);">' +
+    '<div style="flex:1;min-width:0;cursor:pointer;" onclick="editCompany(' + rowIndex + ',\'' + sheet + '\')">' +
+      '<div style="font-weight:600;font-size:14px;">' + name + '</div>' +
+      '<div style="font-size:12px;color:var(--text-light);margin-top:2px;">' + stage + '</div>' +
+      '<div style="font-size:13px;margin-top:4px;color:var(--success, #2e7d32);font-weight:600;">Last contact: ' + escapeHtml(dateStr) + '</div>' +
+    '</div>' +
+  '</div>';
 }
 
 function formatFollowUpTaskRow(item, kind) {
@@ -3163,7 +3195,22 @@ function renderFollowUpTasks(companies) {
   if (weekHead) weekHead.textContent = weekLabel;
   boxTw.innerHTML = data.thisWeek.length
     ? data.thisWeek.map(function(item) { return formatFollowUpTaskRow(item, 'week'); }).join('')
-    : '<p style="font-size:13px;color:var(--text-light);margin:0;">No follow-ups in this Fri → Thu week.</p>';
+    : '<p style="font-size:13px;color:var(--text-light);margin:0 0 8px;">No follow-ups planned in this Fri → Thu week.</p>';
+  var jdTitle = 'This week — job done';
+  try {
+    if (data.thisFri && data.thisThu && typeof fmtYMD === 'function') {
+      jdTitle = 'This week — job done ' + fmtYMD(data.thisFri) + ' → ' + fmtYMD(data.thisThu);
+    }
+  } catch (e) {}
+  var jdHead = document.querySelector('#followUpTasksCard [data-jobdone-week-title]');
+  if (jdHead) jdHead.textContent = jdTitle;
+  var boxJd = document.getElementById('thisWeekJobDoneList');
+  if (boxJd) {
+    var jd = data.jobDone || [];
+    boxJd.innerHTML = jd.length
+      ? jd.map(function(item) { return formatJobDoneTaskRow(item); }).join('')
+      : '<p style="font-size:13px;color:var(--text-light);margin:0;">No visits / last contacts logged in this Fri → Thu week yet.</p>';
+  }
   if (card) card.style.display = '';
   // Keep KPI count in sync
   const kpi = document.getElementById('kpiOverdue');
