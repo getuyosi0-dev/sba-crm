@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.37 (2026-09-21 top10-from-dashboard)</title>
+<title>SBA Drive CRM v25.38 (2026-09-21 top10-excel-score-only)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -395,7 +395,7 @@ body { padding-bottom: 80px; }
       <span>Top 10 by Priority Score</span>
       <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by Priority Score (Won / Lost / No Opportunity excluded). Columns: Opportunities, Support Needed, By Whom (Sales Owner), By When (Plan By When, or Next Follow-up if empty).</p>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by the <strong>Priority Score</strong> column in Sales Tracker (same numbers as Excel). Won / Lost / No Opportunity excluded.</p>
     <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
   </div>
@@ -934,7 +934,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-top10-from-dashboard loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-top10-excel-score-only loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2210,34 +2210,48 @@ function companyDisplayName(c) {
   return String(c.name || c.company || c.company_name || '').trim();
 }
 
+function readExcelPriorityScore(c) {
+  if (!c) return 0;
+  // 1) Numeric value already on the company object
+  var raw = c.priority_score;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '' && String(raw).trim().charAt(0) !== '=') {
+    var n = parseFloat(raw);
+    if (!isNaN(n) && isFinite(n)) return n;
+  }
+  // 2) Read live from the workbook cell (handles formula cells with cached .v)
+  try {
+    if (!workbook || c._rowIndex == null || c._rowIndex < 0) return 0;
+    var sheetName = c._sheetName || findTargetSheetName();
+    if (!sheetName || !workbook.Sheets[sheetName]) return 0;
+    var sheet = workbook.Sheets[sheetName];
+    var info = getSheetAoaInfo(sheet);
+    var headers = info.headers || [];
+    var scoreCol = -1;
+    for (var i = 0; i < headers.length; i++) {
+      var nk = normalizeHeader(headers[i] || '');
+      if (nk === 'priority_score' || nk === 'score') { scoreCol = i; break; }
+    }
+    if (scoreCol < 0) return 0;
+    var addr = XLSX.utils.encode_cell({ r: c._rowIndex, c: scoreCol });
+    var cell = sheet[addr];
+    if (!cell) return 0;
+    // Prefer calculated value .v, then formatted .w
+    if (cell.v != null && cell.v !== '' && typeof cell.v !== 'boolean') {
+      if (typeof cell.v === 'number' && isFinite(cell.v)) return cell.v;
+      var pv = parseFloat(cell.v);
+      if (!isNaN(pv) && String(cell.v).trim().charAt(0) !== '=') return pv;
+    }
+    if (cell.w != null && String(cell.w).trim() !== '') {
+      var pw = parseFloat(String(cell.w).replace(/,/g, ''));
+      if (!isNaN(pw)) return pw;
+    }
+  } catch (e) {}
+  return 0;
+}
+
 function computeTop10ByPriority(companies) {
   const listAll = companies || getCompaniesFromWorkbook();
-  // Prefer Excel Dashboard Top 10 (exact match to Sheets formulas) when present
-  try {
-    const dash = readTop10FromDashboard();
-    if (dash && dash.length) {
-      console.log('[SBA] Top10 from Dashboard sheet:', dash.map(function(d) { return d.name + '=' + d.score; }));
-      return dash.map(function(d) {
-        var live = findCompanyByName(d.name, listAll);
-        var c = live || {
-          name: d.name,
-          company: d.name,
-          sales_stage: d.stage,
-          priority: d.priority,
-          priority_score: d.score,
-          _rowIndex: -1,
-          _sheetName: findTargetSheetName() || ''
-        };
-        // Overlay dashboard stage/score/priority for display accuracy
-        if (d.stage) c.sales_stage = d.stage;
-        if (d.priority) c.priority = d.priority;
-        c.priority_score = d.score;
-        return { c: c, score: d.score, fromDashboard: true };
-      });
-    }
-  } catch (e) {
-    console.warn('[SBA] Dashboard Top10 read failed, using live scores', e);
-  }
+  // Rank ONLY by Excel Priority Score column (same numbers as the sheet)
   const list = listAll.filter(function(c) {
     const nm = companyDisplayName(c);
     if (!nm) return false;
@@ -2246,12 +2260,19 @@ function computeTop10ByPriority(companies) {
     if (isClosedStage(c.sales_stage || c.stage)) return false;
     return true;
   });
-  return list.map(function(c) {
-    return { c: c, score: computeLivePriorityScore(c), fromDashboard: false };
+  const ranked = list.map(function(c) {
+    const score = readExcelPriorityScore(c);
+    return { c: c, score: score, fromDashboard: false };
+  }).filter(function(item) {
+    return item.score > 0; // only rows with a real Excel score
   }).sort(function(a, b) {
     if (b.score !== a.score) return b.score - a.score;
     return companyDisplayName(a.c).localeCompare(companyDisplayName(b.c));
   }).slice(0, 10);
+  console.log('[SBA] Top10 by Excel Priority Score:', ranked.map(function(t) {
+    return companyDisplayName(t.c) + '=' + t.score;
+  }));
+  return ranked;
 }
 
 function renderTop10Table(companies) {
@@ -2308,8 +2329,7 @@ function refreshTop10Table() {
     return companyDisplayName(t.c) + '=' + t.score;
   }));
   renderTop10Table(all);
-  var src = (top[0] && top[0].fromDashboard) ? 'Excel Dashboard' : 'live scores';
-  showToast('Top 10 from ' + src + ' (' + all.length + ' companies)', 'success');
+  showToast('Top 10 by Excel Priority Score (' + top.length + ' of ' + all.length + ' companies)', 'success');
 }
 
 /** One-click: rewrite Rank formulas (open deals only) + Dashboard Critical+High, save to Drive. */
