@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.32 (2026-09-21 desktop-nav-fix)</title>
+<title>SBA Drive CRM v25.34 (2026-09-21 live-score-top10)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -42,10 +42,27 @@ body { padding-bottom: 80px; }
 .drive-status.disconnected { background: rgba(220,53,69,0.3); }
 .drive-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); }
 .drive-status.disconnected .drive-dot { background: var(--danger); }
-.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--border); display: flex; justify-content: space-around; padding: 8px 0 calc(8px + var(--safe-bottom)); z-index: 100; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
-.nav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; color: var(--text-light); font-size: 10px; cursor: pointer; transition: all 0.2s; border: none; background: none; min-width: 0; }
-.nav-item.active { color: var(--primary); }
-.nav-item svg { width: 24px; height: 24px; }
+.bottom-nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--card); border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-start; align-items: stretch;
+  gap: 0; padding: 6px 4px calc(6px + var(--safe-bottom));
+  z-index: 200; box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+  overflow-x: auto; -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.bottom-nav::-webkit-scrollbar { display: none; }
+.nav-item {
+  flex: 1 0 auto; min-width: 56px; max-width: 88px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; padding: 6px 4px; color: var(--text-light);
+  font-size: 10px; cursor: pointer; transition: all 0.2s;
+  border: none; background: none;
+}
+.nav-item span { line-height: 1.1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item.active { color: var(--primary); font-weight: 700; }
+.nav-item.active svg { stroke: var(--primary); }
+.nav-item svg { width: 22px; height: 22px; flex-shrink: 0; }
 .screen { display: none; padding: 16px; max-width: 900px; margin: 0 auto; animation: fadeIn 0.25s ease; }
 .screen.active { display: block; }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -255,12 +272,12 @@ body { padding-bottom: 80px; }
 <nav class="desktop-nav desktop-only">
   <div style="font-weight:700;font-size:16px;">SBA Drive CRM</div>
   <div class="nav-links">
-    <a href="#" class="nav-link active" onclick="navigate('dashboard')">Dashboard</a>
-    <a href="#" class="nav-link" onclick="navigate('companies')">Companies</a>
-    <a href="#" class="nav-link" onclick="navigate('sheets')">Sheets</a>
-    <a href="#" class="nav-link" onclick="navigate('weekly')">Weekly</a>
-    <a href="#" class="nav-link" onclick="navigate('email')">Email</a>
-    <a href="#" class="nav-link" onclick="navigate('drive')">Drive</a>
+    <a href="#" class="nav-link active" data-nav="dashboard" onclick="navigate('dashboard'); return false;">Dashboard</a>
+    <a href="#" class="nav-link" data-nav="companies" onclick="navigate('companies'); return false;">Companies</a>
+    <a href="#" class="nav-link" data-nav="sheets" onclick="navigate('sheets'); return false;">Sheets</a>
+    <a href="#" class="nav-link" data-nav="weekly" onclick="navigate('weekly'); return false;">Weekly</a>
+    <a href="#" class="nav-link" data-nav="email" onclick="navigate('email'); return false;">Email</a>
+    <a href="#" class="nav-link" data-nav="drive" onclick="navigate('drive'); return false;">Drive</a>
   </div>
   <button type="button" onclick="openModeModal()" style="margin-right:10px;padding:6px 12px;font-size:12px;font-weight:600;border-radius:8px;border:1px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.15);color:#fff;cursor:pointer;">Mode</button>
   <span id="workbookModeBadgeDesktop" style="display:none;font-size:11px;font-weight:600;color:#fff;background:rgba(255,255,255,0.2);padding:4px 10px;border-radius:12px;margin-right:10px;"></span>
@@ -643,23 +660,29 @@ body { padding-bottom: 80px; }
 
 <!-- Bottom Nav -->
 <nav class="bottom-nav mobile-only">
-  <button class="nav-item active" onclick="navigate('dashboard')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Home
+  <button type="button" class="nav-item active" data-nav="dashboard" onclick="navigate('dashboard')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    <span>Home</span>
   </button>
-  <button class="nav-item" onclick="navigate('companies')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>Companies
+  <button type="button" class="nav-item" data-nav="companies" onclick="navigate('companies')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+    <span>Companies</span>
   </button>
-  <button class="nav-item" id="navWeeklyBtn" onclick="navigate('weekly')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>Weekly
+  <button type="button" class="nav-item" data-nav="weekly" id="navWeeklyBtn" onclick="navigate('weekly')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+    <span>Weekly</span>
   </button>
-  <button class="nav-item" onclick="navigate('email')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Email
+  <button type="button" class="nav-item" data-nav="email" onclick="navigate('email')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+    <span>Email</span>
   </button>
-  <button class="nav-item" onclick="navigate('sheets')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>Sheets
+  <button type="button" class="nav-item" data-nav="sheets" onclick="navigate('sheets')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    <span>Sheets</span>
   </button>
-  <button class="nav-item" onclick="navigate('drive')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Drive
+  <button type="button" class="nav-item" data-nav="drive" onclick="navigate('drive')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+    <span>Drive</span>
   </button>
 </nav>
 
@@ -911,7 +934,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-desktop-nav-fix loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-live-score-top10 loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1704,8 +1727,13 @@ function navigate(screen) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   var scr = document.getElementById('screen-' + screen);
   if (scr) scr.classList.add('active');
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
   document.querySelectorAll('.nav-link').forEach(function(n) { n.classList.remove('active'); });
+  // Highlight current page (white pill on desktop, primary color on mobile)
+  var navKey = (screen === 'edit') ? 'companies' : screen;
+  document.querySelectorAll('.nav-item[data-nav="' + navKey + '"], .nav-link[data-nav="' + navKey + '"]').forEach(function(n) {
+    n.classList.add('active');
+  });
   const titles = {
     dashboard: 'Dashboard',
     companies: 'Companies',
@@ -1990,8 +2018,13 @@ let execPeriodMode = 'month'; // month | 3m | 6m | year | all
  * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
  */
 function companyPriorityScore(c) {
-  const sheetScore = parseFloat(c.priority_score);
-  if (!isNaN(sheetScore) && sheetScore >= 0 && String(c.priority_score).trim() !== '') {
+  // Prefer Excel/Sheets cached Priority Score when it is a real calculated value.
+  // After add/edit via the app, formula cells are often blank or 0 until Excel opens
+  // the file — in that case compute the live score so Top 10 stays correct (e.g. BGI Hawassa).
+  const raw = c && c.priority_score;
+  const sheetScore = parseFloat(raw);
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '' &&
+      !isNaN(sheetScore) && sheetScore > 0) {
     return sheetScore;
   }
   return computeLivePriorityScore(c);
