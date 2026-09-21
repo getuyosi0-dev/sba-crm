@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.35 (2026-09-21 top10-always-live)</title>
+<title>SBA Drive CRM v25.36 (2026-09-21 top10-bgi-fix)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -934,7 +934,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-top10-always-live loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-top10-bgi-fix loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1938,6 +1938,10 @@ function getCompaniesFromWorkbook() {
       else if (p === 'high' || p === 'medium') company.opp_status = 'Warm';
       else if (p === 'low') company.opp_status = 'Cold';
     }
+    // Always set display name from the row's company cell (Top 10 filters on c.name)
+    var displayName = String(nameVal || company.name || company.company || '').trim();
+    company.name = displayName;
+    if (!company.company) company.company = displayName;
     companies.push(company);
   }
   return companies;
@@ -2036,8 +2040,19 @@ function companyPriorityScore(c) {
   return computeLivePriorityScore(c);
 }
 
+function pickCompanyField(c, keys) {
+  if (!c) return '';
+  for (var i = 0; i < keys.length; i++) {
+    var v = c[keys[i]];
+    if (v !== undefined && v !== null && String(v).trim() !== '' && String(v).trim().charAt(0) !== '=') {
+      return v;
+    }
+  }
+  return '';
+}
+
 function computeLivePriorityScore(c) {
-  // Exact mirror of Excel / _Lists
+  // Exact mirror of Excel / _Lists VLOOKUP weights
   const stageProb = {
     'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
     'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4,
@@ -2047,34 +2062,35 @@ function computeLivePriorityScore(c) {
   const potMap = { 'High': 30, 'Medium': 10, 'Low': 3 };
   const relMap = { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
 
-  const stage = String(c.sales_stage || '').trim();
-  let prob = parseFloat(c.probability);
+  const stage = String(pickCompanyField(c, ['sales_stage', 'stage', 'pipeline_stage']) || '').trim();
+  let prob = parseFloat(pickCompanyField(c, ['probability', 'probability_', 'prob']));
   if (isNaN(prob) || prob < 0) {
     prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
   }
-  if (prob > 1) prob = prob / 100; // sheet sometimes stores 65 meaning 65%
+  if (prob > 1) prob = prob / 100;
 
-  // Total Contacted may arrive as text "0" / "8"
-  let visits = parseFloat(String(c.total_contacted != null ? c.total_contacted : '').replace(/,/g, '').trim());
+  let visits = parseFloat(String(pickCompanyField(c, ['total_contacted', 'total_contact', 'visit_count']) || '0').replace(/,/g, '').trim());
   if (isNaN(visits) || visits < 0) visits = 0;
   visits = Math.min(visits, 10);
 
-  let val = parseFloat(String(c.est_value != null ? c.est_value : '').replace(/,/g, '').replace(/ETB/gi, '').trim());
+  let val = parseFloat(String(pickCompanyField(c, ['est_value', 'est_business_value_etb', 'est_business_value', 'business_value']) || '0').replace(/,/g, '').replace(/ETB/gi, '').trim());
   if (isNaN(val) || val < 0) val = 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
 
-  const pot = potMap[String(c.sales_potential || '').trim()] || 0;
-  const rel = relMap[String(c.relationship_level || '').trim()] || 0;
+  const potRaw = String(pickCompanyField(c, ['sales_potential', 'potential']) || '').trim();
+  const relRaw = String(pickCompanyField(c, ['relationship_level', 'relationship']) || '').trim();
+  const pot = potMap[potRaw] || 0;
+  const rel = relMap[relRaw] || 0;
 
   let urgency = 0;
   try {
-    const fu = excelSerialToDate(c.next_follow_up_date);
+    const fu = excelSerialToDate(pickCompanyField(c, ['next_follow_up_date', 'next_followup_date', 'follow_up_date']));
     if (fu) {
       const today = new Date();
       const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
       const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
-      if (fuUTC < todayUTC) urgency = 5; // overdue
-      else if ((fuUTC - todayUTC) <= 7 * 86400000) urgency = 3; // due within 7 days
+      if (fuUTC < todayUTC) urgency = 5;
+      else if ((fuUTC - todayUTC) <= 7 * 86400000) urgency = 3;
     }
   } catch (e) {}
 
@@ -2111,21 +2127,26 @@ function resolveTop10ByWhen(c) {
   return String(when).trim();
 }
 
+function companyDisplayName(c) {
+  if (!c) return '';
+  return String(c.name || c.company || c.company_name || '').trim();
+}
+
 function computeTop10ByPriority(companies) {
   const list = (companies || getCompaniesFromWorkbook()).filter(function(c) {
-    return c.name && String(c.name).trim()
-      && !/^(legend|notes?)$/i.test(String(c.name).trim())
-      && String(c.name).indexOf('——') !== 0
-      && !isClosedStage(c.sales_stage);
+    const nm = companyDisplayName(c);
+    if (!nm) return false;
+    if (/^(legend|notes?)$/i.test(nm)) return false;
+    if (nm.indexOf('——') === 0) return false;
+    if (isClosedStage(c.sales_stage || c.stage)) return false;
+    return true;
   });
-  // Always rank with LIVE score so newly added companies (blank Priority Score
-  // in the sheet) still appear in the correct order (e.g. BGI Hawassa).
+  // Always rank with LIVE score (matches Excel when formulas have run; works when blank)
   return list.map(function(c) {
-    const score = computeLivePriorityScore(c);
-    return { c: c, score: score };
+    return { c: c, score: computeLivePriorityScore(c) };
   }).sort(function(a, b) {
     if (b.score !== a.score) return b.score - a.score;
-    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+    return companyDisplayName(a.c).localeCompare(companyDisplayName(b.c));
   }).slice(0, 10);
 }
 
@@ -2159,8 +2180,8 @@ function renderTop10Table(companies) {
     const bg = i % 2 ? 'background:#f7fafc;' : '';
     html += '<tr style="border-bottom:1px solid var(--border);' + bg + 'cursor:pointer;" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
       '<td style="padding:8px 6px;font-weight:700;">' + (i + 1) + '</td>' +
-      '<td style="padding:8px 6px;font-weight:600;max-width:140px;">' + escapeHtml(c.name || '') +
-      '<div style="font-size:10px;color:var(--text-light);font-weight:400;">' + escapeHtml(c.sales_stage || '') + '</div></td>' +
+      '<td style="padding:8px 6px;font-weight:600;max-width:140px;">' + escapeHtml(companyDisplayName(c)) +
+      '<div style="font-size:10px;color:var(--text-light);font-weight:400;">' + escapeHtml(c.sales_stage || c.stage || '') + '</div></td>' +
       '<td style="padding:8px 6px;font-weight:700;">' + item.score + '</td>' +
       '<td style="padding:8px 6px;">' + escapeHtml(p) + '</td>' +
       '<td style="padding:8px 6px;max-width:120px;">' + escapeHtml(String(opp)) + '</td>' +
@@ -2175,8 +2196,13 @@ function renderTop10Table(companies) {
 
 function refreshTop10Table() {
   if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
-  renderTop10Table(getCompaniesFromWorkbook());
-  showToast('Top 10 refreshed', 'success');
+  const all = getCompaniesFromWorkbook();
+  const top = computeTop10ByPriority(all);
+  console.log('[SBA] Top10 refresh: companies=', all.length, 'top=', top.map(function(t) {
+    return companyDisplayName(t.c) + '=' + t.score;
+  }));
+  renderTop10Table(all);
+  showToast('Top 10 refreshed (' + all.length + ' companies)', 'success');
 }
 
 /** One-click: rewrite Rank formulas (open deals only) + Dashboard Critical+High, save to Drive. */
