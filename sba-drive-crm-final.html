@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.31 (2026-09-21 sticky-nav)</title>
+<title>SBA Drive CRM v25.32 (2026-09-21 desktop-nav-fix)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -168,17 +168,17 @@ body { padding-bottom: 80px; }
 .cell-data { background: var(--card); padding: 10px 8px; font-size: 13px; }
 .cell-data input { width: 100%; border: none; background: transparent; font-size: 13px; font-family: inherit; padding: 0; }
 .cell-data input:focus { outline: none; }
-/* Base desktop-nav hidden on mobile via .desktop-only */
-.desktop-nav { display: none; }
-
+/* Show desktop top nav vs mobile header by breakpoint */
 @media (min-width: 768px) {
+  .mobile-only { display: none !important; }
   .kpi-grid { grid-template-columns: repeat(4, 1fr); }
   .quick-actions { grid-template-columns: repeat(4, 1fr); }
-  .bottom-nav { display: none; }
+  .bottom-nav { display: none !important; }
   body { padding-bottom: 16px; }
-  /* Stay on top while scrolling (reference: fixed top bar) */
-  .desktop-nav {
-    display: flex;
+  /* Full nav bar fixed at top while scrolling */
+  .desktop-nav,
+  .desktop-nav.desktop-only {
+    display: flex !important;
     position: fixed;
     top: 0;
     left: 0;
@@ -193,7 +193,7 @@ body { padding-bottom: 80px; }
     height: 56px;
     box-shadow: 0 2px 14px rgba(15,76,129,0.35);
   }
-  .desktop-nav .nav-links { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; }
+  .desktop-nav .nav-links { display: flex; gap: 4px; flex-wrap: nowrap; align-items: center; flex: 1; justify-content: center; }
   .desktop-nav .nav-link {
     color: rgba(255,255,255,0.85);
     text-decoration: none;
@@ -211,9 +211,8 @@ body { padding-bottom: 80px; }
     font-weight: 600;
     box-shadow: 0 1px 4px rgba(0,0,0,0.12);
   }
-  /* Offset page content under fixed nav */
   #mainApp { padding-top: 56px; }
-  .screen { padding: 24px; }
+  .screen { padding: 24px; max-width: 1100px; }
   .modal-overlay { align-items: center; }
   .modal-sheet { border-radius: var(--radius); max-height: 85vh; }
   .toast-container { top: 70px; }
@@ -221,7 +220,7 @@ body { padding-bottom: 80px; }
 }
 @media (max-width: 767px) {
   .desktop-only { display: none !important; }
-  /* Offset under fixed mobile header */
+  .desktop-nav { display: none !important; }
   #mainApp { padding-top: 56px; }
   .toast-container { top: 64px; }
   .search-bar { top: 56px; }
@@ -912,7 +911,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-sticky-nav loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-desktop-nav-fix loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
