@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.34 (2026-09-21 live-score-top10)</title>
+<title>SBA Drive CRM v25.35 (2026-09-21 top10-always-live)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -934,7 +934,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-live-score-top10 loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-21-top10-always-live loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2018,13 +2018,19 @@ let execPeriodMode = 'month'; // month | 3m | 6m | year | all
  * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
  */
 function companyPriorityScore(c) {
-  // Prefer Excel/Sheets cached Priority Score when it is a real calculated value.
-  // After add/edit via the app, formula cells are often blank or 0 until Excel opens
-  // the file — in that case compute the live score so Top 10 stays correct (e.g. BGI Hawassa).
+  // Prefer Excel/Sheets cached Priority Score only when it is a real number.
+  // New rows from the app often have blank score or a formula string ("=IF...") until
+  // Excel/Sheets recalculates — those must use the live formula or Top 10 is wrong.
   const raw = c && c.priority_score;
-  const sheetScore = parseFloat(raw);
-  if (raw !== undefined && raw !== null && String(raw).trim() !== '' &&
-      !isNaN(sheetScore) && sheetScore > 0) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return computeLivePriorityScore(c);
+  }
+  const s = String(raw).trim();
+  if (s.charAt(0) === '=') {
+    return computeLivePriorityScore(c);
+  }
+  const sheetScore = parseFloat(s);
+  if (!isNaN(sheetScore) && isFinite(sheetScore) && sheetScore > 0) {
     return sheetScore;
   }
   return computeLivePriorityScore(c);
@@ -2112,8 +2118,11 @@ function computeTop10ByPriority(companies) {
       && String(c.name).indexOf('——') !== 0
       && !isClosedStage(c.sales_stage);
   });
+  // Always rank with LIVE score so newly added companies (blank Priority Score
+  // in the sheet) still appear in the correct order (e.g. BGI Hawassa).
   return list.map(function(c) {
-    return { c: c, score: companyPriorityScore(c) };
+    const score = computeLivePriorityScore(c);
+    return { c: c, score: score };
   }).sort(function(a, b) {
     if (b.score !== a.score) return b.score - a.score;
     return String(a.c.name || '').localeCompare(String(b.c.name || ''));
@@ -3118,9 +3127,12 @@ function excelSerialToDate(v) {
 }
 function companyPriorityLabel(c) {
   const p = String(c.priority || '').trim();
-  if (p) return p;
-  const score = parseFloat(c.priority_score);
-  if (!isNaN(score)) {
+  // Ignore formula strings in Priority column
+  if (p && p.charAt(0) !== '=') return p;
+  const score = typeof computeLivePriorityScore === 'function'
+    ? computeLivePriorityScore(c)
+    : parseFloat(c.priority_score);
+  if (!isNaN(score) && isFinite(score)) {
     if (score >= 65) return 'Critical';
     if (score >= 45) return 'High';
     if (score >= 25) return 'Medium';
