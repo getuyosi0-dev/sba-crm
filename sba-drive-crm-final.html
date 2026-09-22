@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.45 (2026-09-22 lists-page)</title>
+<title>SBA Drive CRM v25.47 (2026-09-22 top10-excel-rank)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -396,14 +396,9 @@ body { padding-bottom: 80px; }
       <span>Top 10 by Priority Score</span>
       <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by <strong>recomputed Priority Score</strong> using the Excel formula (Prob×40 + Potential + Relationship + Visits + Value + Urgency). Won / Lost / No Opportunity excluded.</p>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ordered by Excel <strong>Rank (helper)</strong> when available (same as Excel Top 10). Score from Priority Score column (or formula if blank). Won / Lost / No Opportunity excluded.</p>
     <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
-  </div>
-
-  <div class="card" id="scoreListsCard" style="display:none;margin-bottom:12px;">
-    <div class="card-title">Score weights (_Lists)</div>
-    <div id="scoreListsEditor"></div>
   </div>
 
   <div class="card" id="executedSalesCard" style="display:none;margin-bottom:12px;">
@@ -966,7 +961,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-22-lists-page loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-22-top10-excel-rank loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2314,16 +2309,8 @@ function pickCompanyField(c, keys) {
 }
 
 function computeLivePriorityScore(c) {
-  // Exact mirror of Sales Tracker col 14 (Priority Score) + col 13 (Probability from stage):
-  // N = MIN(100, ROUND(
-  //   M*40
-  //   + VLOOKUP(I, _Lists High=30/Med=10/Low=3)
-  //   + VLOOKUP(S, _Lists Good=15/Warm=8/Cold=2)
-  //   + MIN(G,10)
-  //   + IF(L>=1000000,10, IF(L>0,5,0))
-  //   + IF(Q<TODAY(),5, IF(Q-TODAY()<=7,3,0))
-  // ))
-  // M = VLOOKUP(J Sales Stage, _Lists probability)  — always from stage (like Excel)
+  // Mirror Sales Tracker Priority Score formula using _Lists maps.
+  // Hardened: fuzzy stage/relationship match; prefer sheet Probability when present.
   const lists = typeof getScoreLists === 'function' ? getScoreLists() : null;
   const stageProb = (lists && lists.stageProb) || {
     'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
@@ -2334,27 +2321,75 @@ function computeLivePriorityScore(c) {
   const potMap = (lists && lists.potMap) || { 'High': 30, 'Medium': 10, 'Low': 3 };
   const relMap = (lists && lists.relMap) || { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
 
-  const stage = String(pickCompanyField(c, ['sales_stage', 'stage', 'pipeline_stage']) || '').trim();
-  // Col 13: probability always from Sales Stage / _Lists
-  let prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
+  function lookupMap(map, raw) {
+    var s = String(raw || '').trim();
+    if (!s) return 0;
+    if (map[s] != null) return map[s];
+    // case-insensitive exact
+    var lower = s.toLowerCase();
+    for (var k in map) {
+      if (Object.prototype.hasOwnProperty.call(map, k) && k.toLowerCase() === lower) return map[k];
+    }
+    // prefix / contains (e.g. "Good" → "Good Relationship", "Waiting Customer" → full stage)
+    var best = null, bestLen = 0;
+    for (var k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      var kl = k.toLowerCase();
+      if (kl.indexOf(lower) === 0 || lower.indexOf(kl) === 0 || kl.indexOf(lower) >= 0 || lower.indexOf(kl) >= 0) {
+        if (k.length > bestLen) { bestLen = k.length; best = map[k]; }
+      }
+    }
+    return best != null ? best : 0;
+  }
 
-  // Col G: Total Contacted
+  function lookupStageProb(stage) {
+    var s = String(stage || '').trim();
+    if (!s) return 0.05;
+    if (stageProb[s] != null) return stageProb[s];
+    var lower = s.toLowerCase();
+    for (var k in stageProb) {
+      if (Object.prototype.hasOwnProperty.call(stageProb, k) && k.toLowerCase() === lower) return stageProb[k];
+    }
+    // "Waiting Customer" → "Waiting Customer Decision"; "Decision time" → "Decision time taking long"
+    var bestKey = null, bestLen = 0;
+    for (var k in stageProb) {
+      if (!Object.prototype.hasOwnProperty.call(stageProb, k)) continue;
+      var kl = k.toLowerCase();
+      if (kl.indexOf(lower) === 0 || lower.indexOf(kl) === 0) {
+        if (k.length > bestLen) { bestLen = k.length; bestKey = k; }
+      }
+    }
+    if (bestKey) return stageProb[bestKey];
+    return 0.05;
+  }
+
+  const stage = String(pickCompanyField(c, ['sales_stage', 'stage', 'pipeline_stage']) || '').trim();
+
+  // Prefer Excel Probability (%) cell when present (col M) — matches what Excel uses in the score formula
+  let prob = null;
+  var probRaw = pickCompanyField(c, ['probability', 'probability_', 'prob']);
+  if (probRaw !== '' && probRaw != null) {
+    var p = parseFloat(String(probRaw).replace(/%/g, '').trim());
+    if (!isNaN(p)) {
+      if (p > 1) p = p / 100;
+      if (p >= 0 && p <= 1) prob = p;
+    }
+  }
+  if (prob == null) prob = lookupStageProb(stage);
+
   let visits = parseFloat(String(pickCompanyField(c, ['total_contacted', 'total_contact', 'visit_count']) || '0').replace(/,/g, '').trim());
   if (isNaN(visits) || visits < 0) visits = 0;
   visits = Math.min(visits, 10);
 
-  // Col L: Est. Business Value
   let val = parseFloat(String(pickCompanyField(c, ['est_value', 'est_business_value_etb', 'est_business_value', 'business_value']) || '0').replace(/,/g, '').replace(/ETB/gi, '').trim());
   if (isNaN(val) || val < 0) val = 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
 
-  // Col I + S
   const potRaw = String(pickCompanyField(c, ['sales_potential', 'potential']) || '').trim();
   const relRaw = String(pickCompanyField(c, ['relationship_level', 'relationship']) || '').trim();
-  const pot = potMap[potRaw] || 0;
-  const rel = relMap[relRaw] || 0;
+  const pot = lookupMap(potMap, potRaw);
+  const rel = lookupMap(relMap, relRaw);
 
-  // Col Q: Next Follow-up Date urgency
   let urgency = 0;
   try {
     const fu = excelSerialToDate(pickCompanyField(c, ['next_follow_up_date', 'next_followup_date', 'follow_up_date']));
@@ -2369,7 +2404,6 @@ function computeLivePriorityScore(c) {
 
   return Math.min(100, Math.round(prob * 40 + pot + rel + visits + valueBonus + urgency));
 }
-
 
 /** Plan By When first; if empty use Next Follow-up Date (next visit plan). */
 function resolveTop10ByWhen(c) {
@@ -2419,25 +2453,73 @@ function companyDisplayName(c) {
  *   ))
  * Does not use the Priority Score cell value.
  */
+/**
+ * Top 10:
+ * 1) Prefer Excel Rank (helper) when present (same order as Excel Dashboard)
+ * 2) Else sort by live Priority Score formula
+ * Score shown: Excel Priority Score cell if present, else live formula
+ */
 function computeTop10ByPriority(companies) {
   const listAll = companies || getCompaniesFromWorkbook();
-  const list = listAll.filter(function(c) {
-    const nm = companyDisplayName(c);
+  const open = listAll.filter(function(c) {
+    const nm = typeof companyDisplayName === 'function' ? companyDisplayName(c) : (c.name || '');
     if (!nm) return false;
     if (/^(legend|notes?)$/i.test(nm)) return false;
-    if (nm.indexOf('——') === 0) return false;
     if (isClosedStage(c.sales_stage || c.stage)) return false;
     return true;
   });
-  const ranked = list.map(function(c) {
-    const score = computeLivePriorityScore(c);
-    return { c: c, score: score };
-  }).sort(function(a, b) {
-    if (b.score !== a.score) return b.score - a.score;
-    return companyDisplayName(a.c).localeCompare(companyDisplayName(b.c));
-  }).slice(0, 10);
-  console.log('[SBA] Top10 by Excel formula (live):', ranked.map(function(t) {
-    return companyDisplayName(t.c) + '=' + t.score;
+
+  function sheetScore(c) {
+    var raw = c.priority_score;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+    var s = String(raw).trim();
+    if (s.charAt(0) === '=') return null;
+    var n = parseFloat(s);
+    if (!isNaN(n) && isFinite(n) && n > 0) return n;
+    return null;
+  }
+  function sheetRank(c) {
+    var raw = c.rank_helper != null ? c.rank_helper : c.rank;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+    var s = String(raw).trim();
+    if (s.charAt(0) === '=') return null;
+    var n = parseFloat(s);
+    if (!isNaN(n) && isFinite(n) && n > 0) return n;
+    return null;
+  }
+
+  var withMeta = open.map(function(c) {
+    var live = computeLivePriorityScore(c);
+    var sc = sheetScore(c);
+    var rk = sheetRank(c);
+    return {
+      c: c,
+      score: sc != null ? sc : live,
+      live: live,
+      rank: rk
+    };
+  });
+
+  var hasRanks = withMeta.some(function(x) { return x.rank != null; });
+  if (hasRanks) {
+    // Excel Rank (helper) order — ranks 1..10
+    withMeta = withMeta.filter(function(x) { return x.rank != null; })
+      .sort(function(a, b) {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+      });
+  } else {
+    withMeta.sort(function(a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+    });
+  }
+
+  var ranked = withMeta.slice(0, 10).map(function(x) {
+    return { c: x.c, score: x.score, rank: x.rank, live: x.live };
+  });
+  console.log('[SBA] Top10', hasRanks ? 'by Excel Rank' : 'by live score', ranked.map(function(t) {
+    return (t.c.name || '') + ' rank=' + t.rank + ' score=' + t.score + ' live=' + t.live;
   }));
   return ranked;
 }
@@ -3975,8 +4057,6 @@ function renderDashboard() {
     renderTop10Table(companies);
     renderExecutedSalesTable(companies);
     if (el('top10Card')) el('top10Card').style.display = '';
-    if (el('scoreListsCard')) el('scoreListsCard').style.display = '';
-    try { renderScoreListsEditor(); } catch (e) {}
     
     if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
     if (el('pptReportCard')) el('pptReportCard').style.display = '';
@@ -3987,7 +4067,6 @@ function renderDashboard() {
     } catch (e) {}
   } else {
     if (el('top10Card')) el('top10Card').style.display = 'none';
-    if (el('scoreListsCard')) el('scoreListsCard').style.display = 'none';
     if (el('executedSalesCard')) el('executedSalesCard').style.display = 'none';
     if (el('pptReportCard')) el('pptReportCard').style.display = 'none';
   }
@@ -4288,29 +4367,71 @@ function renderDashboard() {
 // ==================== COMPANIES LIST ====================
 function renderCompanies() {
   const companies = getCompaniesFromWorkbook();
-  const search = document.getElementById('companySearch').value.toLowerCase();
-  let list = companies;
-  if (search) list = list.filter(c => String(c.name||'').toLowerCase().includes(search) || String(c.industry||'').toLowerCase().includes(search));
-  if (companyFilter !== 'all') list = list.filter(c => companyTempBucket(c) === companyFilter.toLowerCase());
-  document.getElementById('companyList').innerHTML = list.map(c => `
-    <div class="company-card" onclick="editCompany(${c._rowIndex},'${String(c._sheetName).replace(/'/g, "\\'")}')">
-      <div class="company-header">
-        <div class="company-name">${escapeHtml(c.name || 'Unnamed')}</div>
-        <span class="badge badge-${escapeHtml(companyTempBucket(c))}">${escapeHtml(tempLabel(companyTempBucket(c)))}</span>
-      </div>
-      <div class="company-meta">
-        <span class="badge badge-industry">${escapeHtml(c.industry || '')}</span>
-        ${c.sales_stage ? `<span class="badge" style="background:#e8eaf6;color:#3f51b5;">${escapeHtml(c.sales_stage)}</span>` : ''}
-        ${c.est_value ? `<span class="badge" style="background:#e0f2f1;color:#00695c;">ETB ${escapeHtml(formatNum(c.est_value))}</span>` : ''}
-      </div>
-      <div class="company-location">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-        ${escapeHtml(c.location || 'No location')} ${c.contact_person ? '&bull; ' + escapeHtml(c.contact_person) : ''}
-      </div>
-    </div>
-  `).join('') || '<div class="empty-state"><p>No companies found</p></div>';
-}
+  const searchEl = document.getElementById('companySearch');
+  const search = searchEl ? String(searchEl.value || '').toLowerCase() : '';
+  let list = companies.slice();
+  if (search) {
+    list = list.filter(function(c) {
+      return String(c.name || '').toLowerCase().indexOf(search) >= 0
+        || String(c.industry || '').toLowerCase().indexOf(search) >= 0;
+    });
+  }
+  if (companyFilter !== 'all') {
+    list = list.filter(function(c) {
+      return companyTempBucket(c) === companyFilter.toLowerCase();
+    });
+  }
+  // Sort by Excel Rank (helper) when present; else Priority Score; closed at bottom
+  list = list.map(function(c) {
+    var closed = isClosedStage(c.sales_stage || c.stage);
+    var rk = parseFloat(c.rank_helper != null ? c.rank_helper : c.rank);
+    if (isNaN(rk) || rk <= 0) rk = null;
+    var sc = parseFloat(c.priority_score);
+    if (isNaN(sc) || sc <= 0) {
+      sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
+    }
+    return { c: c, score: sc, rank: rk, closed: closed };
+  }).sort(function(a, b) {
+    if (a.closed !== b.closed) return a.closed ? 1 : -1;
+    if (a.rank != null && b.rank != null && a.rank !== b.rank) return a.rank - b.rank;
+    if (a.rank != null && b.rank == null) return -1;
+    if (a.rank == null && b.rank != null) return 1;
+    if (b.score !== a.score) return b.score - a.score;
+    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+  });
 
+  var fallbackRank = 0;
+  document.getElementById('companyList').innerHTML = list.map(function(item) {
+    var c = item.c;
+    var score = item.score;
+    var closed = item.closed;
+    var rank = item.rank;
+    if (!closed && rank == null) { fallbackRank += 1; rank = fallbackRank; }
+    var topBadge = closed
+      ? '<span class="badge" style="background:#eceff1;color:#546e7a;">Closed</span>'
+      : (rank <= 10
+        ? '<span class="badge" style="background:#0f4c81;color:#fff;">#' + rank + ' · ' + score + '</span>'
+        : '<span class="badge" style="background:#eceff1;color:#546e7a;">#' + rank + ' · ' + score + '</span>');
+    var sheet = String(c._sheetName || '').replace(/'/g, "\\'");
+    return '<div class="company-card" onclick="editCompany(' + c._rowIndex + ',\'' + sheet + '\')">' +
+      '<div class="company-header">' +
+        '<div class="company-name">' + escapeHtml(c.name || 'Unnamed') + '</div>' +
+        topBadge +
+      '</div>' +
+      '<div class="company-meta">' +
+        '<span class="badge badge-' + escapeHtml(companyTempBucket(c)) + '">' + escapeHtml(tempLabel(companyTempBucket(c))) + '</span>' +
+        (c.industry ? '<span class="badge badge-industry">' + escapeHtml(c.industry) + '</span>' : '') +
+        (c.sales_stage ? '<span class="badge" style="background:#e8eaf6;color:#3f51b5;">' + escapeHtml(c.sales_stage) + '</span>' : '') +
+        (c.est_value ? '<span class="badge" style="background:#e0f2f1;color:#00695c;">ETB ' + escapeHtml(formatNum(c.est_value)) + '</span>' : '') +
+      '</div>' +
+      '<div class="company-location">' +
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ' +
+        escapeHtml(c.location || '') +
+        (c.contact_person ? (c.location ? ' &bull; ' : '') + escapeHtml(c.contact_person) : '') +
+      '</div>' +
+    '</div>';
+  }).join('') || '<div class="empty-state"><p>No companies found</p></div>';
+}
 function setFilter(f) {
   companyFilter = f;
   document.querySelectorAll('#screen-companies .filter-chip').forEach(function(b) {
