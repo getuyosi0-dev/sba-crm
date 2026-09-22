@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.42 (2026-09-21 top10-always-formula)</title>
+<title>SBA Drive CRM v25.45 (2026-09-22 lists-page)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -275,6 +275,7 @@ body { padding-bottom: 80px; }
     <a href="#" class="nav-link active" data-nav="dashboard" onclick="navigate('dashboard'); return false;">Dashboard</a>
     <a href="#" class="nav-link" data-nav="companies" onclick="navigate('companies'); return false;">Companies</a>
     <a href="#" class="nav-link" data-nav="sheets" onclick="navigate('sheets'); return false;">Sheets</a>
+    <a href="#" class="nav-link" data-nav="lists" onclick="navigate('lists'); return false;">Lists</a>
     <a href="#" class="nav-link" data-nav="weekly" onclick="navigate('weekly'); return false;">Weekly</a>
     <a href="#" class="nav-link" data-nav="email" onclick="navigate('email'); return false;">Email</a>
     <a href="#" class="nav-link" data-nav="drive" onclick="navigate('drive'); return false;">Drive</a>
@@ -398,6 +399,11 @@ body { padding-bottom: 80px; }
     <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Open deals ranked by <strong>recomputed Priority Score</strong> using the Excel formula (Prob×40 + Potential + Relationship + Visits + Value + Urgency). Won / Lost / No Opportunity excluded.</p>
     <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
+  </div>
+
+  <div class="card" id="scoreListsCard" style="display:none;margin-bottom:12px;">
+    <div class="card-title">Score weights (_Lists)</div>
+    <div id="scoreListsEditor"></div>
   </div>
 
   <div class="card" id="executedSalesCard" style="display:none;margin-bottom:12px;">
@@ -551,6 +557,28 @@ body { padding-bottom: 80px; }
   </div>
 </div>
 
+<!-- LISTS (_Lists sheet full editor) -->
+<div class="screen" id="screen-lists">
+  <div class="card">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+      <span>Lists sheet (_Lists)</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="renderListsPage()">Reload</button>
+        <button type="button" class="btn btn-primary btn-sm" style="width:auto;" onclick="saveListsPageToWorkbook()">Save to workbook</button>
+      </div>
+    </div>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">
+      Full editable view of the Excel <strong>_Lists</strong> sheet (stages, probabilities, potential scores, relationship scores, industries, …).
+      Edit any cell, then <strong>Save to workbook</strong> and <strong>Save to Drive</strong>.
+    </p>
+    <div id="listsSheetMeta" style="font-size:12px;margin-bottom:8px;color:var(--text-light);"></div>
+    <div id="listsSheetGrid" style="overflow:auto;max-height:70vh;border:1px solid var(--border);border-radius:8px;"></div>
+    <p style="font-size:11px;color:var(--text-light);margin:10px 0 0;">
+      Tip: leave empty cells blank. Numbers like probability should be 0–1 (e.g. 0.65). After saving, Top 10 uses the new weights.
+    </p>
+  </div>
+</div>
+
 <!-- DRIVE FILES -->
 
 <div class="screen" id="screen-weekly">
@@ -679,6 +707,10 @@ body { padding-bottom: 80px; }
   <button type="button" class="nav-item" data-nav="sheets" onclick="navigate('sheets')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
     <span>Sheets</span>
+  </button>
+  <button type="button" class="nav-item" data-nav="lists" onclick="navigate('lists')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+    <span>Lists</span>
   </button>
   <button type="button" class="nav-item" data-nav="drive" onclick="navigate('drive')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
@@ -934,7 +966,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-21-top10-always-formula loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-22-lists-page loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1428,6 +1460,7 @@ function loadFileFromDrive(fileId) {
       // SheetJS is used ONLY to populate the CRM's display data (lists,
       // search, dashboard counts) from here on — never written back to Drive.
       workbook = XLSX.read(data, { type: 'array', cellFormula: true, cellStyles: true, cellDates: false });
+      try { invalidateScoreListsCache(); } catch (e) {}
       showToast('File loaded: ' + currentFile.name, 'success');
       updateFileUI();
       updateDirtyIndicator();
@@ -1524,6 +1557,7 @@ async function saveToDrive(options) {
     // Keep UI in sync with what was actually uploaded
     try {
       workbook = XLSX.read(new Uint8Array(outBuf), { type: 'array', cellFormula: true, cellStyles: true, cellDates: false });
+      try { invalidateScoreListsCache(); } catch (e) {}
       renderDashboard();
       renderCompanies();
     } catch (e) { console.warn('[SBA] post-save workbook reload failed', e); }
@@ -1739,6 +1773,7 @@ function navigate(screen) {
     companies: 'Companies',
     edit: 'Edit Company',
     sheets: 'Excel Sheets',
+    lists: 'Lists (_Lists)',
     weekly: 'Weekly',
     email: 'Email report',
     drive: 'Google Drive'
@@ -1747,6 +1782,7 @@ function navigate(screen) {
   if (pt) pt.textContent = titles[screen] || 'SBA Drive';
   if (screen === 'companies') renderCompanies();
   if (screen === 'sheets') renderSheets();
+  if (screen === 'lists') try { renderListsPage(); } catch (e) { console.warn(e); }
   if (screen === 'drive') listDriveFiles();
   if (screen === 'email') {
     try { initEmailReportPage(); } catch (e) { console.warn(e); }
@@ -2040,6 +2076,232 @@ function companyPriorityScore(c) {
   return computeLivePriorityScore(c);
 }
 
+
+/** Cached maps from Excel _Lists sheet (editable in the app). */
+var _scoreListsCache = null;
+
+function getScoreLists() {
+  if (_scoreListsCache) return _scoreListsCache;
+  return loadScoreListsFromWorkbook();
+}
+
+function loadScoreListsFromWorkbook() {
+  var defaults = {
+    stageProb: {
+      'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
+      'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4,
+      'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85,
+      'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0
+    },
+    potMap: { 'High': 30, 'Medium': 10, 'Low': 3 },
+    relMap: { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 },
+    stageRows: [], // [{stage, prob, nextAction, excelRow}]
+    potRows: [],   // [{label, score, excelRow}]
+    relRows: []
+  };
+  if (!workbook) {
+    _scoreListsCache = defaults;
+    return defaults;
+  }
+  var listsName = null;
+  for (var i = 0; i < workbook.SheetNames.length; i++) {
+    if (/^_?lists$/i.test(String(workbook.SheetNames[i]).replace(/^\uFEFF/, ''))) {
+      listsName = workbook.SheetNames[i];
+      break;
+    }
+  }
+  if (!listsName) {
+    for (var i = 0; i < workbook.SheetNames.length; i++) {
+      if (/list/i.test(workbook.SheetNames[i])) { listsName = workbook.SheetNames[i]; break; }
+    }
+  }
+  if (!listsName || !workbook.Sheets[listsName]) {
+    _scoreListsCache = defaults;
+    return defaults;
+  }
+  var sheet = workbook.Sheets[listsName];
+  var data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+  var stageProb = {};
+  var potMap = {};
+  var relMap = {};
+  var stageRows = [];
+  var potRows = [];
+  var relRows = [];
+
+  // Row 0 = headers. Cols: A=0 stage, B=1 prob, C=2 nextAction, E=4 pot, F=5 potScore, H=7 rel, I=8 relScore
+  for (var r = 1; r < data.length; r++) {
+    var row = data[r] || [];
+    var stage = String(row[0] != null ? row[0] : '').trim();
+    if (stage) {
+      var prob = parseFloat(row[1]);
+      if (isNaN(prob)) prob = 0;
+      if (prob > 1) prob = prob / 100;
+      stageProb[stage] = prob;
+      stageRows.push({
+        stage: stage,
+        prob: prob,
+        nextAction: String(row[2] != null ? row[2] : '').trim(),
+        excelRow: r // 0-based AOA index
+      });
+    }
+    var pot = String(row[4] != null ? row[4] : '').trim();
+    if (pot) {
+      var ps = parseFloat(row[5]);
+      if (isNaN(ps)) ps = 0;
+      potMap[pot] = ps;
+      potRows.push({ label: pot, score: ps, excelRow: r });
+    }
+    var rel = String(row[7] != null ? row[7] : '').trim();
+    if (rel) {
+      var rs = parseFloat(row[8]);
+      if (isNaN(rs)) rs = 0;
+      relMap[rel] = rs;
+      relRows.push({ label: rel, score: rs, excelRow: r });
+    }
+  }
+  // Merge defaults for any missing keys
+  Object.keys(defaults.stageProb).forEach(function(k) {
+    if (stageProb[k] == null) stageProb[k] = defaults.stageProb[k];
+  });
+  Object.keys(defaults.potMap).forEach(function(k) {
+    if (potMap[k] == null) potMap[k] = defaults.potMap[k];
+  });
+  Object.keys(defaults.relMap).forEach(function(k) {
+    if (relMap[k] == null) relMap[k] = defaults.relMap[k];
+  });
+
+  _scoreListsCache = {
+    stageProb: stageProb,
+    potMap: potMap,
+    relMap: relMap,
+    stageRows: stageRows,
+    potRows: potRows,
+    relRows: relRows,
+    listsSheetName: listsName
+  };
+  console.log('[SBA] Loaded _Lists score maps', {
+    stages: Object.keys(stageProb).length,
+    pot: potMap,
+    rel: relMap
+  });
+  return _scoreListsCache;
+}
+
+function invalidateScoreListsCache() {
+  _scoreListsCache = null;
+}
+
+function writeListsCell(sheet, r, c, value, isNum) {
+  var addr = XLSX.utils.encode_cell({ r: r, c: c });
+  if (value === '' || value === null || value === undefined) {
+    delete sheet[addr];
+    return;
+  }
+  if (isNum) {
+    var n = parseFloat(value);
+    sheet[addr] = { t: 'n', v: isNaN(n) ? 0 : n };
+  } else {
+    sheet[addr] = { t: 's', v: String(value) };
+  }
+}
+
+function saveScoreListsFromForm() {
+  if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
+  var lists = loadScoreListsFromWorkbook();
+  var sheetName = lists.listsSheetName;
+  if (!sheetName || !workbook.Sheets[sheetName]) {
+    showToast('_Lists sheet not found in this file', 'error');
+    return;
+  }
+  var sheet = workbook.Sheets[sheetName];
+
+  // Stage probs from form inputs listStageProb_*
+  lists.stageRows.forEach(function(row, idx) {
+    var el = document.getElementById('listStageProb_' + idx);
+    if (!el) return;
+    var prob = parseFloat(el.value);
+    if (isNaN(prob)) return;
+    if (prob > 1 && prob <= 100) prob = prob / 100;
+    writeListsCell(sheet, row.excelRow, 1, prob, true); // col B
+    var na = document.getElementById('listStageAction_' + idx);
+    if (na) writeListsCell(sheet, row.excelRow, 2, na.value, false);
+  });
+  lists.potRows.forEach(function(row, idx) {
+    var el = document.getElementById('listPotScore_' + idx);
+    if (!el) return;
+    writeListsCell(sheet, row.excelRow, 5, el.value, true); // col F
+  });
+  lists.relRows.forEach(function(row, idx) {
+    var el = document.getElementById('listRelScore_' + idx);
+    if (!el) return;
+    writeListsCell(sheet, row.excelRow, 8, el.value, true); // col I
+  });
+
+  invalidateScoreListsCache();
+  loadScoreListsFromWorkbook();
+  try { renderScoreListsEditor(); } catch (e) {}
+  try { refreshTop10Table(); } catch (e) {}
+  showToast('Score weights updated in _Lists (save to Drive to keep)', 'success');
+  if (typeof markPendingEdit === 'function') {
+    try { markPendingEdit({ type: 'lists' }); } catch (e) {}
+  }
+}
+
+function renderScoreListsEditor() {
+  var el = document.getElementById('scoreListsEditor');
+  if (!el) return;
+  if (!workbook) {
+    el.innerHTML = '<p class="empty-state">Open a workbook first.</p>';
+    return;
+  }
+  var lists = loadScoreListsFromWorkbook();
+  var html = '';
+  html += '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">These values live on the Excel <strong>_Lists</strong> sheet. Change them here, then <strong>Save weights</strong> and <strong>Save to Drive</strong>. Top 10 uses them immediately.</p>';
+
+  html += '<div style="font-weight:700;font-size:13px;margin:10px 0 6px;">Sales Potential → Score</div>';
+  html += '<table style="width:100%;max-width:360px;border-collapse:collapse;font-size:13px;margin-bottom:12px;">';
+  html += '<tr style="background:var(--primary);color:#fff;"><th style="padding:6px;text-align:left;">Potential</th><th style="padding:6px;">Score</th></tr>';
+  lists.potRows.forEach(function(row, idx) {
+    html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px;">' + escapeHtml(row.label) + '</td>';
+    html += '<td style="padding:6px;"><input type="number" id="listPotScore_' + idx + '" value="' + row.score + '" style="width:80px;padding:6px;border:1px solid var(--border);border-radius:6px;"></td></tr>';
+  });
+  if (!lists.potRows.length) {
+    html += '<tr><td colspan="2" style="padding:6px;color:var(--text-light);">No potential rows in _Lists</td></tr>';
+  }
+  html += '</table>';
+
+  html += '<div style="font-weight:700;font-size:13px;margin:10px 0 6px;">Relationship Level → Score</div>';
+  html += '<table style="width:100%;max-width:360px;border-collapse:collapse;font-size:13px;margin-bottom:12px;">';
+  html += '<tr style="background:var(--primary);color:#fff;"><th style="padding:6px;text-align:left;">Relationship</th><th style="padding:6px;">Score</th></tr>';
+  lists.relRows.forEach(function(row, idx) {
+    html += '<tr style="border-bottom:1px solid var(--border);"><td style="padding:6px;">' + escapeHtml(row.label) + '</td>';
+    html += '<td style="padding:6px;"><input type="number" id="listRelScore_' + idx + '" value="' + row.score + '" style="width:80px;padding:6px;border:1px solid var(--border);border-radius:6px;"></td></tr>';
+  });
+  if (!lists.relRows.length) {
+    html += '<tr><td colspan="2" style="padding:6px;color:var(--text-light);">No relationship rows in _Lists</td></tr>';
+  }
+  html += '</table>';
+
+  html += '<div style="font-weight:700;font-size:13px;margin:10px 0 6px;">Sales Stage → Probability (0–1)</div>';
+  html += '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px;min-width:480px;">';
+  html += '<tr style="background:var(--primary);color:#fff;"><th style="padding:6px;text-align:left;">Stage</th><th style="padding:6px;">Prob</th><th style="padding:6px;text-align:left;">Next Action</th></tr>';
+  lists.stageRows.forEach(function(row, idx) {
+    html += '<tr style="border-bottom:1px solid var(--border);">';
+    html += '<td style="padding:6px;">' + escapeHtml(row.stage) + '</td>';
+    html += '<td style="padding:6px;"><input type="number" step="0.01" min="0" max="1" id="listStageProb_' + idx + '" value="' + row.prob + '" style="width:70px;padding:6px;border:1px solid var(--border);border-radius:6px;"></td>';
+    html += '<td style="padding:6px;"><input type="text" id="listStageAction_' + idx + '" value="' + escapeHtml(row.nextAction).replace(/"/g, '&quot;') + '" style="width:100%;min-width:160px;padding:6px;border:1px solid var(--border);border-radius:6px;"></td>';
+    html += '</tr>';
+  });
+  html += '</table></div>';
+
+  html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+  html += '<button type="button" class="btn btn-primary btn-sm" style="width:auto;" onclick="saveScoreListsFromForm()">Save weights to workbook</button>';
+  html += '<button type="button" class="btn btn-secondary btn-sm" style="width:auto;" onclick="invalidateScoreListsCache();renderScoreListsEditor();refreshTop10Table();">Reload from Excel</button>';
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+
 function pickCompanyField(c, keys) {
   if (!c) return '';
   for (var i = 0; i < keys.length; i++) {
@@ -2052,36 +2314,47 @@ function pickCompanyField(c, keys) {
 }
 
 function computeLivePriorityScore(c) {
-  // Exact mirror of Excel / _Lists VLOOKUP weights
-  const stageProb = {
+  // Exact mirror of Sales Tracker col 14 (Priority Score) + col 13 (Probability from stage):
+  // N = MIN(100, ROUND(
+  //   M*40
+  //   + VLOOKUP(I, _Lists High=30/Med=10/Low=3)
+  //   + VLOOKUP(S, _Lists Good=15/Warm=8/Cold=2)
+  //   + MIN(G,10)
+  //   + IF(L>=1000000,10, IF(L>0,5,0))
+  //   + IF(Q<TODAY(),5, IF(Q-TODAY()<=7,3,0))
+  // ))
+  // M = VLOOKUP(J Sales Stage, _Lists probability)  — always from stage (like Excel)
+  const lists = typeof getScoreLists === 'function' ? getScoreLists() : null;
+  const stageProb = (lists && lists.stageProb) || {
     'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
     'Technical Discussion': 0.35, 'Demo / Sample': 0.5, 'Proposal Sent': 0.4,
     'Negotiation': 0.75, 'Waiting Customer Decision': 0.65, 'Purchase Order': 0.85,
     'Won': 1, 'Lost': 0, 'Decision time taking long': 0.5, 'No Opportunity': 0
   };
-  const potMap = { 'High': 30, 'Medium': 10, 'Low': 3 };
-  const relMap = { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
+  const potMap = (lists && lists.potMap) || { 'High': 30, 'Medium': 10, 'Low': 3 };
+  const relMap = (lists && lists.relMap) || { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
 
   const stage = String(pickCompanyField(c, ['sales_stage', 'stage', 'pipeline_stage']) || '').trim();
-  let prob = parseFloat(pickCompanyField(c, ['probability', 'probability_', 'prob']));
-  if (isNaN(prob) || prob < 0) {
-    prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
-  }
-  if (prob > 1) prob = prob / 100;
+  // Col 13: probability always from Sales Stage / _Lists
+  let prob = stageProb[stage] != null ? stageProb[stage] : 0.05;
 
+  // Col G: Total Contacted
   let visits = parseFloat(String(pickCompanyField(c, ['total_contacted', 'total_contact', 'visit_count']) || '0').replace(/,/g, '').trim());
   if (isNaN(visits) || visits < 0) visits = 0;
   visits = Math.min(visits, 10);
 
+  // Col L: Est. Business Value
   let val = parseFloat(String(pickCompanyField(c, ['est_value', 'est_business_value_etb', 'est_business_value', 'business_value']) || '0').replace(/,/g, '').replace(/ETB/gi, '').trim());
   if (isNaN(val) || val < 0) val = 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
 
+  // Col I + S
   const potRaw = String(pickCompanyField(c, ['sales_potential', 'potential']) || '').trim();
   const relRaw = String(pickCompanyField(c, ['relationship_level', 'relationship']) || '').trim();
   const pot = potMap[potRaw] || 0;
   const rel = relMap[relRaw] || 0;
 
+  // Col Q: Next Follow-up Date urgency
   let urgency = 0;
   try {
     const fu = excelSerialToDate(pickCompanyField(c, ['next_follow_up_date', 'next_followup_date', 'follow_up_date']));
@@ -3586,6 +3859,8 @@ function markFollowUpJobDone(rowIndex, sheetName) {
 }
 
 function renderDashboard() {
+  try { invalidateScoreListsCache(); } catch (e) {}
+
 
   if (!workbook) return;
   const companies = getCompaniesFromWorkbook().filter(c => c.name && String(c.name).trim()
@@ -3700,6 +3975,9 @@ function renderDashboard() {
     renderTop10Table(companies);
     renderExecutedSalesTable(companies);
     if (el('top10Card')) el('top10Card').style.display = '';
+    if (el('scoreListsCard')) el('scoreListsCard').style.display = '';
+    try { renderScoreListsEditor(); } catch (e) {}
+    
     if (el('executedSalesCard')) el('executedSalesCard').style.display = '';
     if (el('pptReportCard')) el('pptReportCard').style.display = '';
     updatePptTemplateStatus();
@@ -3709,6 +3987,7 @@ function renderDashboard() {
     } catch (e) {}
   } else {
     if (el('top10Card')) el('top10Card').style.display = 'none';
+    if (el('scoreListsCard')) el('scoreListsCard').style.display = 'none';
     if (el('executedSalesCard')) el('executedSalesCard').style.display = 'none';
     if (el('pptReportCard')) el('pptReportCard').style.display = 'none';
   }
@@ -7416,6 +7695,149 @@ function buildLiveDashboardPreviewHtml() {
     return '';
   }
 }
+
+
+function findListsSheetName() {
+  if (!workbook) return null;
+  for (var i = 0; i < workbook.SheetNames.length; i++) {
+    var sn = workbook.SheetNames[i];
+    if (/^_?lists$/i.test(String(sn).trim())) return sn;
+  }
+  for (var i = 0; i < workbook.SheetNames.length; i++) {
+    if (/list/i.test(workbook.SheetNames[i])) return workbook.SheetNames[i];
+  }
+  return null;
+}
+
+/** Full _Lists sheet as editable HTML table (all columns/rows with data). */
+function renderListsPage() {
+  var grid = document.getElementById('listsSheetGrid');
+  var meta = document.getElementById('listsSheetMeta');
+  if (!grid) return;
+  if (!workbook) {
+    grid.innerHTML = '<p class="empty-state" style="padding:16px;">Open a workbook first.</p>';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  var sheetName = findListsSheetName();
+  if (!sheetName || !workbook.Sheets[sheetName]) {
+    grid.innerHTML = '<p class="empty-state" style="padding:16px;">No _Lists sheet in this file.</p>';
+    if (meta) meta.textContent = '';
+    return;
+  }
+  var sheet = workbook.Sheets[sheetName];
+  var data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true, blankrows: true });
+  // Determine used range: max col with any content, rows until trailing empties
+  var maxCol = 0;
+  var lastDataRow = 0;
+  for (var r = 0; r < data.length; r++) {
+    var row = data[r] || [];
+    for (var c = 0; c < row.length; c++) {
+      if (row[c] !== undefined && row[c] !== null && String(row[c]).trim() !== '') {
+        if (c > maxCol) maxCol = c;
+        lastDataRow = r;
+      }
+    }
+  }
+  // Allow a few extra empty rows for adding industries etc.
+  var displayRows = Math.max(lastDataRow + 3, 15);
+  var displayCols = Math.max(maxCol + 1, 13); // A–M typical
+
+  if (meta) {
+    meta.textContent = 'Sheet: "' + sheetName + '" · showing ' + displayRows + ' rows × ' + displayCols + ' columns (edit any cell)';
+  }
+
+  var colLetters = function(n) {
+    var s = '';
+    n = n + 1;
+    while (n > 0) {
+      var m = (n - 1) % 26;
+      s = String.fromCharCode(65 + m) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  };
+
+  var html = '<table style="border-collapse:collapse;font-size:12px;min-width:100%;">';
+  // header row with column letters
+  html += '<thead><tr style="background:#0f4c81;color:#fff;position:sticky;top:0;z-index:2;">';
+  html += '<th style="padding:6px 8px;border:1px solid #0a3a66;min-width:36px;">#</th>';
+  for (var c = 0; c < displayCols; c++) {
+    html += '<th style="padding:6px 8px;border:1px solid #0a3a66;min-width:90px;">' + colLetters(c) + '</th>';
+  }
+  html += '</tr></thead><tbody>';
+
+  for (var r = 0; r < displayRows; r++) {
+    var row = data[r] || [];
+    var bg = r === 0 ? 'background:#e8f0fe;font-weight:600;' : (r % 2 ? 'background:#fafbfc;' : '');
+    html += '<tr style="' + bg + '">';
+    html += '<td style="padding:4px 6px;border:1px solid var(--border);color:var(--text-light);text-align:center;">' + (r + 1) + '</td>';
+    for (var c = 0; c < displayCols; c++) {
+      var v = row[c];
+      if (v === undefined || v === null) v = '';
+      // Don't show formula strings as editable formulas - show value if possible
+      var disp = v;
+      if (typeof disp === 'string' && disp.charAt(0) === '=') disp = '';
+      var safe = String(disp).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      html += '<td style="padding:0;border:1px solid var(--border);">';
+      html += '<input type="text" data-lists-r="' + r + '" data-lists-c="' + c + '" value="' + safe + '" ';
+      html += 'style="width:100%;min-width:88px;box-sizing:border-box;border:none;padding:6px 8px;background:transparent;font:inherit;" />';
+      html += '</td>';
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  grid.innerHTML = html;
+  grid.setAttribute('data-lists-sheet', sheetName);
+  grid.setAttribute('data-lists-rows', String(displayRows));
+  grid.setAttribute('data-lists-cols', String(displayCols));
+}
+
+function saveListsPageToWorkbook() {
+  if (!workbook) { showToast('Open a workbook first', 'warning'); return; }
+  var grid = document.getElementById('listsSheetGrid');
+  if (!grid) return;
+  var sheetName = grid.getAttribute('data-lists-sheet') || findListsSheetName();
+  if (!sheetName || !workbook.Sheets[sheetName]) {
+    showToast('_Lists sheet not found', 'error');
+    return;
+  }
+  var sheet = workbook.Sheets[sheetName];
+  var inputs = grid.querySelectorAll('input[data-lists-r]');
+  var maxR = 0, maxC = 0;
+  inputs.forEach(function(inp) {
+    var r = parseInt(inp.getAttribute('data-lists-r'), 10);
+    var c = parseInt(inp.getAttribute('data-lists-c'), 10);
+    var raw = inp.value;
+    var addr = XLSX.utils.encode_cell({ r: r, c: c });
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      if (sheet[addr]) delete sheet[addr];
+      return;
+    }
+    var s = String(raw).trim();
+    // number?
+    if (/^-?\d+(\.\d+)?$/.test(s)) {
+      sheet[addr] = { t: 'n', v: parseFloat(s) };
+    } else {
+      sheet[addr] = { t: 's', v: s };
+    }
+    if (r > maxR) maxR = r;
+    if (c > maxC) maxC = c;
+  });
+  // Update sheet range
+  try {
+    var end = XLSX.utils.encode_cell({ r: Math.max(maxR, 20), c: Math.max(maxC, 12) });
+    sheet['!ref'] = 'A1:' + end;
+  } catch (e) {}
+
+  if (typeof invalidateScoreListsCache === 'function') invalidateScoreListsCache();
+  try { loadScoreListsFromWorkbook(); } catch (e) {}
+  try { if (typeof refreshTop10Table === 'function') refreshTop10Table(); } catch (e) {}
+  if (typeof markDirtyAndScheduleSave === 'function') markDirtyAndScheduleSave();
+  else if (typeof isDirty !== 'undefined') { isDirty = true; }
+  showToast('Lists sheet saved to workbook — use Save to Drive to upload', 'success');
+}
+
 
 function renderSheets() {
   if (!workbook) {
