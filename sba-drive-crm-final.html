@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.47 (Developed by Yosef Getu)</title>
+<title>SBA Drive CRM v25.47 (2026-09-22 top10-excel-rank)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -2053,21 +2053,15 @@ let execPeriodMode = 'month'; // month | 3m | 6m | year | all
  * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
  */
 function companyPriorityScore(c) {
-  // Prefer Excel/Sheets cached Priority Score only when it is a real number.
-  // New rows from the app often have blank score or a formula string ("=IF...") until
-  // Excel/Sheets recalculates — those must use the live formula or Top 10 is wrong.
-  const raw = c && c.priority_score;
-  if (raw === undefined || raw === null || String(raw).trim() === '') {
-    return computeLivePriorityScore(c);
-  }
-  const s = String(raw).trim();
-  if (s.charAt(0) === '=') {
-    return computeLivePriorityScore(c);
-  }
-  const sheetScore = parseFloat(s);
-  if (!isNaN(sheetScore) && isFinite(sheetScore) && sheetScore > 0) {
-    return sheetScore;
-  }
+  // ALWAYS recompute live from current inputs — never trust the cached Sales Tracker
+  // "Priority Score" cell (col N). That cell is an Excel formula, and the app edits
+  // Stage / Potential / Relationship / Total Contacted / Est. Value / Follow-up Date
+  // directly via SheetJS without ever re-running Excel's formula engine. So the cached
+  // number silently goes stale the moment a company is edited in the app — it only
+  // catches up the next time the file is opened and recalculated in real Excel /
+  // Google Sheets. Recomputing live keeps this in sync with computeTop10ByPriority()
+  // (which already always recomputes) and with what Excel would show after a fresh
+  // recalculation.
   return computeLivePriorityScore(c);
 }
 
@@ -2454,10 +2448,17 @@ function companyDisplayName(c) {
  * Does not use the Priority Score cell value.
  */
 /**
- * Top 10:
- * 1) Prefer Excel Rank (helper) when present (same order as Excel Dashboard)
- * 2) Else sort by live Priority Score formula
- * Score shown: Excel Priority Score cell if present, else live formula
+ * Top 10: ALWAYS sort and score by the live Priority Score formula.
+ *
+ * Previously this preferred the cached "Rank (helper)" (col U) and cached
+ * "Priority Score" (col N) cells when present. Both are Excel formulas that depend
+ * on Stage / Potential / Relationship / Total Contacted / Est. Value / Follow-up Date
+ * — inputs the app edits directly via SheetJS without ever re-running Excel's formula
+ * engine. So those cached cells go stale the instant a company is edited in the app
+ * (confirmed against a real recalculation: cached Rank/Priority Score can lag the
+ * true value by a full priority tier), which made Top 10 disagree with what Excel
+ * shows after opening and recalculating the same file. Recomputing live everywhere
+ * keeps the app internally consistent and matches a freshly recalculated Excel file.
  */
 function computeTop10ByPriority(companies) {
   const listAll = companies || getCompaniesFromWorkbook();
@@ -2469,57 +2470,21 @@ function computeTop10ByPriority(companies) {
     return true;
   });
 
-  function sheetScore(c) {
-    var raw = c.priority_score;
-    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
-    var s = String(raw).trim();
-    if (s.charAt(0) === '=') return null;
-    var n = parseFloat(s);
-    if (!isNaN(n) && isFinite(n) && n > 0) return n;
-    return null;
-  }
-  function sheetRank(c) {
-    var raw = c.rank_helper != null ? c.rank_helper : c.rank;
-    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
-    var s = String(raw).trim();
-    if (s.charAt(0) === '=') return null;
-    var n = parseFloat(s);
-    if (!isNaN(n) && isFinite(n) && n > 0) return n;
-    return null;
-  }
-
   var withMeta = open.map(function(c) {
     var live = computeLivePriorityScore(c);
-    var sc = sheetScore(c);
-    var rk = sheetRank(c);
-    return {
-      c: c,
-      score: sc != null ? sc : live,
-      live: live,
-      rank: rk
-    };
+    return { c: c, score: live, live: live, rank: null };
   });
 
-  var hasRanks = withMeta.some(function(x) { return x.rank != null; });
-  if (hasRanks) {
-    // Excel Rank (helper) order — ranks 1..10
-    withMeta = withMeta.filter(function(x) { return x.rank != null; })
-      .sort(function(a, b) {
-        if (a.rank !== b.rank) return a.rank - b.rank;
-        return String(a.c.name || '').localeCompare(String(b.c.name || ''));
-      });
-  } else {
-    withMeta.sort(function(a, b) {
-      if (b.score !== a.score) return b.score - a.score;
-      return String(a.c.name || '').localeCompare(String(b.c.name || ''));
-    });
-  }
+  withMeta.sort(function(a, b) {
+    if (b.score !== a.score) return b.score - a.score;
+    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+  });
 
   var ranked = withMeta.slice(0, 10).map(function(x) {
     return { c: x.c, score: x.score, rank: x.rank, live: x.live };
   });
-  console.log('[SBA] Top10', hasRanks ? 'by Excel Rank' : 'by live score', ranked.map(function(t) {
-    return (t.c.name || '') + ' rank=' + t.rank + ' score=' + t.score + ' live=' + t.live;
+  console.log('[SBA] Top10 by live score', ranked.map(function(t) {
+    return (t.c.name || '') + ' score=' + t.score;
   }));
   return ranked;
 }
@@ -3528,18 +3493,28 @@ function excelSerialToDate(v) {
   return null;
 }
 function companyPriorityLabel(c) {
-  const p = String(c.priority || '').trim();
-  // Ignore formula strings in Priority column
-  if (p && p.charAt(0) !== '=') return p;
-  const score = typeof computeLivePriorityScore === 'function'
-    ? computeLivePriorityScore(c)
-    : parseFloat(c.priority_score);
-  if (!isNaN(score) && isFinite(score)) {
-    if (score >= 65) return 'Critical';
-    if (score >= 45) return 'High';
-    if (score >= 25) return 'Medium';
-    return 'Low';
+  // Sales Tracker: "Priority" (col O) is an Excel formula derived from the Priority
+  // Score, which is itself derived from Stage / Potential / Relationship / Total
+  // Contacted / Est. Value / Follow-up Date. The app edits those inputs directly via
+  // SheetJS and never re-runs Excel's formula engine, so the cached O-column text can
+  // go stale the moment a company is edited in the app (confirmed: after any edit to
+  // Stage/Potential/etc., the cached label can lag by a full priority tier until the
+  // file is reopened in Excel/Google Sheets). So in Tracker mode, always recompute the
+  // label live from the current inputs instead of trusting the cached cell.
+  if (typeof isTrackerMode === 'function' ? isTrackerMode() : true) {
+    const score = typeof computeLivePriorityScore === 'function'
+      ? computeLivePriorityScore(c)
+      : parseFloat(c.priority_score);
+    if (!isNaN(score) && isFinite(score)) {
+      if (score >= 65) return 'Critical';
+      if (score >= 45) return 'High';
+      if (score >= 25) return 'Medium';
+      return 'Low';
+    }
   }
+  // Master Data: Priority is a manually chosen field (not formula-derived) — trust it.
+  const p = String(c.priority || '').trim();
+  if (p && p.charAt(0) !== '=') return p;
   return '';
 }
 function companyDaysSince(c) {
@@ -4381,21 +4356,15 @@ function renderCompanies() {
       return companyTempBucket(c) === companyFilter.toLowerCase();
     });
   }
-  // Sort by Excel Rank (helper) when present; else Priority Score; closed at bottom
+  // Sort by live Priority Score (never the cached Rank/Priority Score cells — see
+  // computeTop10ByPriority for why those go stale the moment a company is edited).
+  // Closed deals (Won/Lost/No Opportunity) sink to the bottom.
   list = list.map(function(c) {
     var closed = isClosedStage(c.sales_stage || c.stage);
-    var rk = parseFloat(c.rank_helper != null ? c.rank_helper : c.rank);
-    if (isNaN(rk) || rk <= 0) rk = null;
-    var sc = parseFloat(c.priority_score);
-    if (isNaN(sc) || sc <= 0) {
-      sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
-    }
-    return { c: c, score: sc, rank: rk, closed: closed };
+    var sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
+    return { c: c, score: sc, rank: null, closed: closed };
   }).sort(function(a, b) {
     if (a.closed !== b.closed) return a.closed ? 1 : -1;
-    if (a.rank != null && b.rank != null && a.rank !== b.rank) return a.rank - b.rank;
-    if (a.rank != null && b.rank == null) return -1;
-    if (a.rank == null && b.rank != null) return 1;
     if (b.score !== a.score) return b.score - a.score;
     return String(a.c.name || '').localeCompare(String(b.c.name || ''));
   });
@@ -5450,7 +5419,12 @@ function builtInFormulaForKey(key, rowNum) {
     return "IF(A" + r + '="","",IFERROR(VLOOKUP(J' + r + ",'_Lists'!$A$2:$B$13,2,0),0))";
   }
   if (k === 'priority_score') {
-    return "IF(A" + r + '="","",MIN(100,ROUND(M' + r + "*40+IFERROR(VLOOKUP(I" + r + ",'_Lists'!$E$2:$F$4,2,0),0)+IFERROR(VLOOKUP(S" + r + ",'_Lists'!$H$2:$I$4,2,0),0)+MIN(G" + r + ",10)*1+IF(L" + r + ">=1000000,10,IF(L" + r + ">0,5,0))+IF(AND(Q" + r + '<>"",Q' + r + "<TODAY()),5,IF(AND(Q" + r + '<>"",Q' + r + "-TODAY()<=7),3,0)),0)))";
+    // NOTE: MIN(G,10) is wrapped in IF(ISNUMBER(...)) so a blank or text-typed
+    // "Total Contacted" cell contributes 0, not Excel's default of ignoring the cell
+    // and returning the bare "10" from MIN's other argument (a real Excel MIN()
+    // quirk, confirmed against a live recalculation — it silently maxed out the
+    // recency bonus for any row where Total Contacted was ever entered as text).
+    return "IF(A" + r + '="","",MIN(100,ROUND(M' + r + "*40+IFERROR(VLOOKUP(I" + r + ",'_Lists'!$E$2:$F$4,2,0),0)+IFERROR(VLOOKUP(S" + r + ",'_Lists'!$H$2:$I$4,2,0),0)+MIN(IF(ISNUMBER(G" + r + "),G" + r + ",0),10)*1+IF(L" + r + ">=1000000,10,IF(L" + r + ">0,5,0))+IF(AND(Q" + r + '<>"",Q' + r + "<TODAY()),5,IF(AND(Q" + r + '<>"",Q' + r + "-TODAY()<=7),3,0)),0)))";
   }
   if (k === 'priority') {
     return 'IF(A' + r + '="","",IF(N' + r + '>=65,"Critical",IF(N' + r + '>=45,"High",IF(N' + r + '>=25,"Medium","Low"))))';
