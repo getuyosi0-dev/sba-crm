@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.51 (2026-09-23 ppt-cell-visible)</title>
+<title>SBA Drive CRM v25.52 (2026-09-23 ppt-reorder-safe)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -961,7 +961,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-23-ppt-cell-visible loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-23-ppt-reorder-safe loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -3384,67 +3384,67 @@ async function fillPptxPlaceholders(templateBuf, map) {
         .replace(/"/g, '&quot;');
     }
     function subKeys(s) {
-      return s.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, function(_, key) {
-        return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key] == null ? '' : map[key]) : '';
+      return String(s).replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, function(_, key) {
+        if (!Object.prototype.hasOwnProperty.call(map, key)) return '';
+        return escXml(map[key]);
       });
     }
 
-    // Pass 1: intact {{KEY}} in raw XML
+    // 1) Replace intact placeholders
     xml = subKeys(xml);
 
-    // Pass 2: placeholders split across </a:t>...<a:t>
+    // 2) Placeholders split across a:t nodes
     if (xml.indexOf('{{') !== -1) {
       xml = xml.replace(/\{\{([A-Z0-9_]*)<\/a:t>(?:[\s\S]*?<a:t\b[^>]*>)+([A-Z0-9_]*)\}\}/g, function(full, pre, post) {
         var key = pre + post;
         if (Object.prototype.hasOwnProperty.call(map, key)) return escXml(map[key]);
         return full;
       });
+      xml = subKeys(xml);
     }
 
-    // Pass 3: join a:t inside each paragraph, replace placeholders, rebuild a valid <a:p>
-    // CRITICAL: in OOXML, <a:r> runs MUST come BEFORE <a:endParaRPr>. Text after endParaRPr is ignored by PowerPoint.
-    xml = xml.replace(/<a:p\b[^>]*>[\s\S]*?<\/a:p>/g, function(para) {
-      var texts = [];
-      para.replace(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g, function(_, t) { texts.push(t); return _; });
-      if (!texts.length) return para;
-      var joined = texts.join('');
-      var replaced = subKeys(joined);
-      // Always rebuild if we touched placeholders or if runs sit after endParaRPr (broken structure)
-      var broken = /<a:endParaRPr\b[\s\S]*<a:r\b/.test(para);
-      if (replaced === joined && !broken) return para;
-
-      var pPrMatch = para.match(/<a:pPr\b[\s\S]*?<\/a:pPr>/);
-      var pPr = pPrMatch ? pPrMatch[0] : '<a:pPr/>';
-      // Prefer rPr from an existing run that has formatting
-      var rPrMatch = para.match(/<a:rPr\b[^>]*\/>|<a:rPr\b[\s\S]*?<\/a:rPr>/);
-      var rPr = rPrMatch ? rPrMatch[0] : '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>';
-      // If empty rPr, force visible black text
-      if (/<a:rPr\s*\/>/.test(rPr) || rPr === '<a:rPr/>') {
-        rPr = '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>';
+    // 3) Template cells often have <a:endParaRPr> BEFORE <a:r> (invalid for PowerPoint).
+    //    Reorder so runs come first, then endParaRPr. Keep full endParaRPr element (not self-closing only).
+    xml = xml.replace(/<a:p(\s[^>]*)?>([\s\S]*?)<\/a:p>/g, function(full, attrs, inner) {
+      // Only fix when endParaRPr appears before a run
+      var endIdx = inner.search(/<a:endParaRPr\b/);
+      var runIdx = inner.search(/<a:r\b/);
+      if (endIdx < 0 || runIdx < 0 || endIdx < runIdx === false) {
+        // still fix empty rPr for visibility
+        if (/<a:rPr\s*\/>/.test(inner)) {
+          inner = inner.replace(/<a:rPr\s*\/>/g,
+            '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>');
+          return '<a:p' + (attrs || '') + '>' + inner + '</a:p>';
+        }
+        return full;
       }
-      var endPrMatch = para.match(/<a:endParaRPr\b[\s\S]*?\/>/);
-      var endPr = endPrMatch ? endPrMatch[0] : '<a:endParaRPr lang="en-US" sz="1400"/>';
+      if (!(endIdx < runIdx)) return full;
 
-      return '<a:p>' + pPr +
-        '<a:r>' + rPr + '<a:t>' + escXml(replaced) + '</a:t></a:r>' +
-        endPr + '</a:p>';
-    });
+      var pPr = '';
+      var pm = inner.match(/<a:pPr\b[\s\S]*?<\/a:pPr>/);
+      if (pm) pPr = pm[0];
 
-    // Pass 4: any remaining intact tokens
-    xml = subKeys(xml);
+      var runs = [];
+      inner.replace(/<a:r\b[\s\S]*?<\/a:r>/g, function(r) {
+        if (/<a:rPr\s*\/>/.test(r) || /<a:rPr><\/a:rPr>/.test(r)) {
+          r = r.replace(/<a:rPr\s*\/>/g,
+            '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>');
+          r = r.replace(/<a:rPr><\/a:rPr>/g,
+            '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>');
+        }
+        runs.push(r);
+        return '';
+      });
 
-    // Pass 5: fix any remaining broken order (runs after endParaRPr) globally
-    xml = xml.replace(/<a:p\b[^>]*>[\s\S]*?<\/a:p>/g, function(para) {
-      if (!/<a:endParaRPr\b[\s\S]*<a:r\b/.test(para)) return para;
-      var texts = [];
-      para.replace(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g, function(_, t) { texts.push(t); return _; });
-      var joined = texts.join('');
-      var pPrMatch = para.match(/<a:pPr\b[\s\S]*?<\/a:pPr>/);
-      var pPr = pPrMatch ? pPrMatch[0] : '<a:pPr/>';
-      var rPr = '<a:rPr lang="en-US" sz="1400"><a:solidFill><a:srgbClr val="1F2A2A"/></a:solidFill></a:rPr>';
-      var endPrMatch = para.match(/<a:endParaRPr\b[\s\S]*?\/>/);
-      var endPr = endPrMatch ? endPrMatch[0] : '<a:endParaRPr lang="en-US" sz="1400"/>';
-      return '<a:p>' + pPr + '<a:r>' + rPr + '<a:t>' + escXml(joined) + '</a:t></a:r>' + endPr + '</a:p>';
+      var endPr = '';
+      var em = inner.match(/<a:endParaRPr\b[\s\S]*?<\/a:endParaRPr>/);
+      if (em) endPr = em[0];
+      else {
+        em = inner.match(/<a:endParaRPr\b[^>]*\/>/);
+        if (em) endPr = em[0];
+      }
+
+      return '<a:p' + (attrs || '') + '>' + pPr + runs.join('') + endPr + '</a:p>';
     });
 
     return xml;
