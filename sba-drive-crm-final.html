@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.47 (Yosef)</title>
+<title>SBA Drive CRM v25.50 (2026-09-23 urgency-fix)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -961,7 +961,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-22-top10-excel-rank loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-23-urgency-fix loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -1932,25 +1932,50 @@ function getCompaniesFromWorkbook() {
     });
     company._headers = headers;
     enrichCompanyWithCanonicals(company, headers);
-    // Pull cached formula results (Priority Score, Probability, etc.) from SheetJS cell.v
-    // sheet_to_json sometimes omits them when only the formula string is prominent
+    // Pull cached formula results from SheetJS cells (v / w).
+    // Google Sheet → xlsx often leaves AOA empty for formula cols until Excel opens the file.
     try {
-      const scoreKeys = ['priority_score', 'score'];
-      const probKeys = ['probability', 'probability_'];
+      const formulaNumKeys = {
+        priority_score: 1, score: 1, probability: 1, probability_: 1,
+        rank_helper: 1, rank: 1, days_since_last_visit: 1, days_since_visit: 1
+      };
+      const formulaTextKeys = {
+        priority: 1, next_action: 1, follow_up_status: 1
+      };
       headers.forEach(function(h, colIdx) {
         if (!h) return;
         const nk = normalizeHeader(h);
-        const isScore = scoreKeys.indexOf(nk) !== -1 || nk === 'priority_score';
-        const isProb = nk.indexOf('probability') !== -1;
-        if (!isScore && !isProb) return;
-        const cur = company[nk];
-        if (cur !== undefined && cur !== null && cur !== '' && !isNaN(parseFloat(cur))) return;
+        const wantNum = !!formulaNumKeys[nk];
+        const wantText = !!formulaTextKeys[nk];
+        if (!wantNum && !wantText) return;
         const addr = XLSX.utils.encode_cell({ r: i, c: colIdx });
         const cell = targetSheet[addr];
-        if (cell && cell.v != null && cell.v !== '' && !isNaN(parseFloat(cell.v))) {
-          company[nk] = cell.v;
-          if (isScore) company.priority_score = cell.v;
-          if (isProb) company.probability = cell.v;
+        if (!cell) return;
+        var cur = company[nk];
+        var hasNum = cur !== undefined && cur !== null && cur !== '' && !isNaN(parseFloat(cur)) && String(cur).charAt(0) !== '=';
+        if (wantNum && !hasNum) {
+          var num = null;
+          if (typeof cell.v === 'number' && isFinite(cell.v)) num = cell.v;
+          else if (cell.w != null && cell.w !== '' && !isNaN(parseFloat(String(cell.w).replace(/,/g, '')))) {
+            num = parseFloat(String(cell.w).replace(/,/g, ''));
+          } else if (cell.v != null && String(cell.v).charAt(0) !== '=' && !isNaN(parseFloat(cell.v))) {
+            num = parseFloat(cell.v);
+          }
+          if (num != null) {
+            company[nk] = num;
+            if (nk === 'score' || nk === 'priority_score') company.priority_score = num;
+            if (nk.indexOf('probability') === 0) company.probability = num;
+            if (nk === 'rank' || nk === 'rank_helper') company.rank_helper = num;
+          }
+        }
+        if (wantText) {
+          var hasText = cur !== undefined && cur !== null && String(cur).trim() !== '' && String(cur).charAt(0) !== '=';
+          if (!hasText) {
+            var txt = null;
+            if (cell.w != null && String(cell.w).trim() !== '' && String(cell.w).charAt(0) !== '=') txt = String(cell.w).trim();
+            else if (cell.v != null && String(cell.v).charAt(0) !== '=') txt = String(cell.v).trim();
+            if (txt) company[nk] = txt;
+          }
         }
       });
     } catch (e) {}
@@ -2053,15 +2078,21 @@ let execPeriodMode = 'month'; // month | 3m | 6m | year | all
  * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
  */
 function companyPriorityScore(c) {
-  // ALWAYS recompute live from current inputs — never trust the cached Sales Tracker
-  // "Priority Score" cell (col N). That cell is an Excel formula, and the app edits
-  // Stage / Potential / Relationship / Total Contacted / Est. Value / Follow-up Date
-  // directly via SheetJS without ever re-running Excel's formula engine. So the cached
-  // number silently goes stale the moment a company is edited in the app — it only
-  // catches up the next time the file is opened and recalculated in real Excel /
-  // Google Sheets. Recomputing live keeps this in sync with computeTop10ByPriority()
-  // (which already always recomputes) and with what Excel would show after a fresh
-  // recalculation.
+  // Prefer Excel/Sheets cached Priority Score only when it is a real number.
+  // New rows from the app often have blank score or a formula string ("=IF...") until
+  // Excel/Sheets recalculates — those must use the live formula or Top 10 is wrong.
+  const raw = c && c.priority_score;
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return computeLivePriorityScore(c);
+  }
+  const s = String(raw).trim();
+  if (s.charAt(0) === '=') {
+    return computeLivePriorityScore(c);
+  }
+  const sheetScore = parseFloat(s);
+  if (!isNaN(sheetScore) && isFinite(sheetScore) && sheetScore > 0) {
+    return sheetScore;
+  }
   return computeLivePriorityScore(c);
 }
 
@@ -2384,19 +2415,40 @@ function computeLivePriorityScore(c) {
   const pot = lookupMap(potMap, potRaw);
   const rel = lookupMap(relMap, relRaw);
 
+  // Urgency: compare pure calendar days (no timezone shift)
+  // Same as Excel: Q < TODAY() → +5; Q - TODAY() <= 7 → +3
   let urgency = 0;
+  let urgencyNote = '';
   try {
-    const fu = excelSerialToDate(pickCompanyField(c, ['next_follow_up_date', 'next_followup_date', 'follow_up_date']));
-    if (fu) {
-      const today = new Date();
-      const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-      const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
-      if (fuUTC < todayUTC) urgency = 5;
-      else if ((fuUTC - todayUTC) <= 7 * 86400000) urgency = 3;
+    const fuRaw = pickCompanyField(c, ['next_follow_up_date', 'next_followup_date', 'follow_up_date']);
+    const fuParts = typeof calendarPartsFromAny === 'function' ? calendarPartsFromAny(fuRaw) : null;
+    if (fuParts && fuParts.y) {
+      const now = new Date();
+      const todayParts = { y: now.getFullYear(), mo: now.getMonth() + 1, d: now.getDate() };
+      const fuDay = Date.UTC(fuParts.y, fuParts.mo - 1, fuParts.d);
+      const todayDay = Date.UTC(todayParts.y, todayParts.mo - 1, todayParts.d);
+      const diffDays = Math.round((fuDay - todayDay) / 86400000);
+      if (diffDays < 0) {
+        urgency = 5;
+        urgencyNote = 'overdue(' + diffDays + 'd)';
+      } else if (diffDays <= 7) {
+        urgency = 3;
+        urgencyNote = 'within7(' + diffDays + 'd)';
+      } else {
+        urgencyNote = 'later(' + diffDays + 'd)';
+      }
     }
   } catch (e) {}
 
-  return Math.min(100, Math.round(prob * 40 + pot + rel + visits + valueBonus + urgency));
+  const total = Math.min(100, Math.round(prob * 40 + pot + rel + visits + valueBonus + urgency));
+  if (typeof window !== 'undefined' && window.__SBA_DEBUG_SCORE) {
+    console.log('[SBA score]', (c && (c.name || c.company)) || '', {
+      prob: prob, pot: pot, rel: rel, visits: visits, valueBonus: valueBonus,
+      urgency: urgency, urgencyNote: urgencyNote, total: total,
+      sheetScore: c && c.priority_score
+    });
+  }
+  return total;
 }
 
 /** Plan By When first; if empty use Next Follow-up Date (next visit plan). */
@@ -2448,17 +2500,10 @@ function companyDisplayName(c) {
  * Does not use the Priority Score cell value.
  */
 /**
- * Top 10: ALWAYS sort and score by the live Priority Score formula.
- *
- * Previously this preferred the cached "Rank (helper)" (col U) and cached
- * "Priority Score" (col N) cells when present. Both are Excel formulas that depend
- * on Stage / Potential / Relationship / Total Contacted / Est. Value / Follow-up Date
- * — inputs the app edits directly via SheetJS without ever re-running Excel's formula
- * engine. So those cached cells go stale the instant a company is edited in the app
- * (confirmed against a real recalculation: cached Rank/Priority Score can lag the
- * true value by a full priority tier), which made Top 10 disagree with what Excel
- * shows after opening and recalculating the same file. Recomputing live everywhere
- * keeps the app internally consistent and matches a freshly recalculated Excel file.
+ * Top 10:
+ * 1) Prefer Excel Rank (helper) when present (same order as Excel Dashboard)
+ * 2) Else sort by live Priority Score formula
+ * Score shown: Excel Priority Score cell if present, else live formula
  */
 function computeTop10ByPriority(companies) {
   const listAll = companies || getCompaniesFromWorkbook();
@@ -2470,22 +2515,66 @@ function computeTop10ByPriority(companies) {
     return true;
   });
 
+  function sheetScore(c) {
+    var candidates = [c.priority_score, c.score];
+    for (var i = 0; i < candidates.length; i++) {
+      var raw = candidates[i];
+      if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+      var s = String(raw).trim();
+      if (s.charAt(0) === '=') continue;
+      var n = parseFloat(s.replace(/,/g, ''));
+      if (!isNaN(n) && isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
+    }
+    return null;
+  }
+  function sheetRank(c) {
+    var raw = c.rank_helper != null ? c.rank_helper : c.rank;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
+    var s = String(raw).trim();
+    if (s.charAt(0) === '=') return null;
+    var n = parseFloat(s);
+    if (!isNaN(n) && isFinite(n) && n > 0) return n;
+    return null;
+  }
+
   var withMeta = open.map(function(c) {
     var live = computeLivePriorityScore(c);
-    return { c: c, score: live, live: live, rank: null };
+    var sc = sheetScore(c);
+    var rk = sheetRank(c);
+    // Prefer Excel Priority Score cell when present; else live formula
+    var score = (sc != null) ? sc : live;
+    return { c: c, score: score, live: live, rank: rk, fromSheet: sc != null };
   });
 
-  withMeta.sort(function(a, b) {
-    if (b.score !== a.score) return b.score - a.score;
-    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
-  });
+  var hasRanks = withMeta.filter(function(x) { return x.rank != null; }).length >= 5;
+  if (hasRanks) {
+    withMeta = withMeta.filter(function(x) { return x.rank != null; })
+      .sort(function(a, b) {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+      });
+  } else {
+    withMeta.sort(function(a, b) {
+      if (b.score !== a.score) return b.score - a.score;
+      return String(a.c.name || '').localeCompare(String(b.c.name || ''));
+    });
+  }
 
   var ranked = withMeta.slice(0, 10).map(function(x) {
-    return { c: x.c, score: x.score, rank: x.rank, live: x.live };
+    return { c: x.c, score: x.score, rank: x.rank, live: x.live, fromSheet: x.fromSheet };
   });
-  console.log('[SBA] Top10 by live score', ranked.map(function(t) {
-    return (t.c.name || '') + ' score=' + t.score;
+  console.log('[SBA] Top10', hasRanks ? 'by Excel Rank' : 'by score', ranked.map(function(t) {
+    return (t.c.name || '') + ' rank=' + t.rank + ' score=' + t.score + (t.fromSheet ? '(sheet)' : '(live=' + t.live + ')') +
+      ' stage=' + (t.c.sales_stage || '');
   }));
+  // One debug dump for first row so urgency/visits are visible in console
+  if (ranked.length && ranked[0].c) {
+    try {
+      window.__SBA_DEBUG_SCORE = true;
+      computeLivePriorityScore(ranked[0].c);
+      window.__SBA_DEBUG_SCORE = false;
+    } catch (e) {}
+  }
   return ranked;
 }
 
@@ -3226,15 +3315,40 @@ function buildPptPlaceholderMap(periodMode) {
   for (let i = 1; i <= 10; i++) {
     const item = top10[i - 1];
     const c = item ? item.c : null;
-    map['TOP_' + i + '_COMPANY'] = c ? String(c.name || '') : '';
-    map['TOP_' + i + '_STAGE'] = c ? String(c.sales_stage || '') : '';
-    map['TOP_' + i + '_SCORE'] = item ? String(item.score != null ? item.score : '') : '';
-    map['TOP_' + i + '_PRIORITY'] = c ? String(companyPriorityLabel(c) || c.priority || '') : '';
-    // Top-10 plan columns on Sales Tracker
-    map['TOP_' + i + '_OPP'] = c ? String(c.opportunities || '').slice(0, 120) : '';
-    map['TOP_' + i + '_SUPPORT'] = c ? String(c.support_needed || '').slice(0, 120) : '';
-    map['TOP_' + i + '_BY_WHOM'] = c ? String(c.sales_owner || owner || '') : '';
-    map['TOP_' + i + '_BY_WHEN'] = c ? resolveTop10ByWhen(c) : '';
+    const name = c ? String(c.name || c.company || '') : '';
+    const stage = c ? String(c.sales_stage || c.stage || '') : '';
+    const score = item && item.score != null ? String(item.score) : '';
+    const prio = c ? String((typeof companyPriorityLabel === 'function' ? companyPriorityLabel(c) : '') || c.priority || '') : '';
+    // Opportunities = Sales Tracker "Opportunities" column only (NOT Opportunity Summary / Notes)
+    const opp = c ? String(c.opportunities || '').slice(0, 160) : '';
+    const support = c ? String(c.support_needed || '').slice(0, 160) : '';
+    const whom = c ? String(c.sales_owner || owner || '') : '';
+    // Plan By When first; else Next Follow-up Date (same as dashboard Top 10)
+    let when = '';
+    if (c) {
+      when = typeof resolveTop10ByWhen === 'function' ? resolveTop10ByWhen(c) : '';
+      if (!when) {
+        const raw = c.plan_by_when || c.next_follow_up_date || '';
+        if (raw && typeof formatDateDDMMMYYYY === 'function') when = formatDateDDMMMYYYY(raw) || String(raw);
+        else when = String(raw || '');
+      }
+    }
+    map['TOP_' + i + '_COMPANY'] = name;
+    map['TOP_' + i + '_STAGE'] = stage;
+    map['TOP_' + i + '_SCORE'] = score;
+    map['TOP_' + i + '_PRIORITY'] = prio;
+    map['TOP_' + i + '_OPP'] = opp;
+    map['TOP_' + i + '_SUPPORT'] = support;
+    map['TOP_' + i + '_BY_WHOM'] = whom;
+    map['TOP_' + i + '_BY_WHEN'] = when;
+    map['TOP' + i + '_COMPANY'] = name;
+    map['TOP' + i + '_STAGE'] = stage;
+    map['TOP' + i + '_SCORE'] = score;
+    map['TOP' + i + '_PRIORITY'] = prio;
+    map['TOP' + i + '_OPP'] = opp;
+    map['TOP' + i + '_SUPPORT'] = support;
+    map['TOP' + i + '_BY_WHOM'] = whom;
+    map['TOP' + i + '_BY_WHEN'] = when;
   }
   for (let i = 1; i <= 4; i++) {
     const r = execRows[i - 1];
@@ -3260,22 +3374,52 @@ async function fillPptxPlaceholders(templateBuf, map) {
   });
   const all = slidePaths.concat(chartPaths);
 
-  // Replace {{KEY}} even when PowerPoint splits runs across multiple <a:t> nodes:
-  // 1) simple full-string replace on each a:t
-  // 2) join consecutive a:t in a paragraph and replace spanning placeholders
+  // Replace {{KEY}} even when PowerPoint splits the placeholder across <a:t> runs.
   function replaceInXml(xml) {
-    // Pass 1: whole-token inside a single text node
-    xml = xml.replace(/\{\{([A-Z0-9_]+)\}\}/g, function(_, key) {
-      return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : '';
-    });
-    // Pass 2: rebuild text across a:t siblings if any {{ remain (split runs)
-    if (xml.indexOf('{{') === -1) return xml;
-    xml = xml.replace(/(<a:t(?:\s[^>]*)?>)([\s\S]*?)(<\/a:t>)/g, function(full, open, text, close) {
-      const next = text.replace(/\{\{([A-Z0-9_]+)\}\}/g, function(_, key) {
-        return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : '';
+    function subKeys(s) {
+      return s.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, function(_, key) {
+        return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key] == null ? '' : map[key]) : '';
       });
-      return open + next + close;
-    });
+    }
+    // Pass 1: intact {{KEY}}
+    xml = subKeys(xml);
+
+    // Pass 2: placeholders split across </a:t>...<a:t> (e.g. {{TOP_10_SUPPO + RT}})
+    if (xml.indexOf('{{') !== -1) {
+      xml = xml.replace(/\{\{([A-Z0-9_]*)<\/a:t>(?:[\s\S]*?<a:t\b[^>]*>)+([A-Z0-9_]*)\}\}/g, function(full, pre, post) {
+        var key = pre + post;
+        if (Object.prototype.hasOwnProperty.call(map, key)) {
+          return String(map[key] == null ? '' : map[key]).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        }
+        return full;
+      });
+    }
+
+    // Pass 3: join a:t text inside each paragraph and replace
+    if (xml.indexOf('{{') !== -1) {
+      xml = xml.replace(/<a:p\b[^>]*>[\s\S]*?<\/a:p>/g, function(para) {
+        if (para.indexOf('{{') === -1) return para;
+        var texts = [];
+        para.replace(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g, function(_, t) { texts.push(t); return _; });
+        if (!texts.length) return para;
+        var joined = texts.join('');
+        if (joined.indexOf('{{') === -1) return para;
+        var replaced = subKeys(joined);
+        if (replaced === joined) return para;
+        var first = true;
+        var safe = replaced.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        return para.replace(/<a:t(\s[^>]*)?>([\s\S]*?)<\/a:t>/g, function(full, attrs) {
+          if (first) {
+            first = false;
+            return '<a:t' + (attrs || '') + '>' + safe + '</a:t>';
+          }
+          return '<a:t' + (attrs || '') + '></a:t>';
+        });
+      });
+    }
+
+    // Pass 4: any remaining intact tokens
+    xml = subKeys(xml);
     return xml;
   }
 
@@ -3493,28 +3637,18 @@ function excelSerialToDate(v) {
   return null;
 }
 function companyPriorityLabel(c) {
-  // Sales Tracker: "Priority" (col O) is an Excel formula derived from the Priority
-  // Score, which is itself derived from Stage / Potential / Relationship / Total
-  // Contacted / Est. Value / Follow-up Date. The app edits those inputs directly via
-  // SheetJS and never re-runs Excel's formula engine, so the cached O-column text can
-  // go stale the moment a company is edited in the app (confirmed: after any edit to
-  // Stage/Potential/etc., the cached label can lag by a full priority tier until the
-  // file is reopened in Excel/Google Sheets). So in Tracker mode, always recompute the
-  // label live from the current inputs instead of trusting the cached cell.
-  if (typeof isTrackerMode === 'function' ? isTrackerMode() : true) {
-    const score = typeof computeLivePriorityScore === 'function'
-      ? computeLivePriorityScore(c)
-      : parseFloat(c.priority_score);
-    if (!isNaN(score) && isFinite(score)) {
-      if (score >= 65) return 'Critical';
-      if (score >= 45) return 'High';
-      if (score >= 25) return 'Medium';
-      return 'Low';
-    }
-  }
-  // Master Data: Priority is a manually chosen field (not formula-derived) — trust it.
   const p = String(c.priority || '').trim();
+  // Ignore formula strings in Priority column
   if (p && p.charAt(0) !== '=') return p;
+  const score = typeof computeLivePriorityScore === 'function'
+    ? computeLivePriorityScore(c)
+    : parseFloat(c.priority_score);
+  if (!isNaN(score) && isFinite(score)) {
+    if (score >= 65) return 'Critical';
+    if (score >= 45) return 'High';
+    if (score >= 25) return 'Medium';
+    return 'Low';
+  }
   return '';
 }
 function companyDaysSince(c) {
@@ -4356,15 +4490,21 @@ function renderCompanies() {
       return companyTempBucket(c) === companyFilter.toLowerCase();
     });
   }
-  // Sort by live Priority Score (never the cached Rank/Priority Score cells — see
-  // computeTop10ByPriority for why those go stale the moment a company is edited).
-  // Closed deals (Won/Lost/No Opportunity) sink to the bottom.
+  // Sort by Excel Rank (helper) when present; else Priority Score; closed at bottom
   list = list.map(function(c) {
     var closed = isClosedStage(c.sales_stage || c.stage);
-    var sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
-    return { c: c, score: sc, rank: null, closed: closed };
+    var rk = parseFloat(c.rank_helper != null ? c.rank_helper : c.rank);
+    if (isNaN(rk) || rk <= 0) rk = null;
+    var sc = parseFloat(c.priority_score);
+    if (isNaN(sc) || sc <= 0) {
+      sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
+    }
+    return { c: c, score: sc, rank: rk, closed: closed };
   }).sort(function(a, b) {
     if (a.closed !== b.closed) return a.closed ? 1 : -1;
+    if (a.rank != null && b.rank != null && a.rank !== b.rank) return a.rank - b.rank;
+    if (a.rank != null && b.rank == null) return -1;
+    if (a.rank == null && b.rank != null) return 1;
     if (b.score !== a.score) return b.score - a.score;
     return String(a.c.name || '').localeCompare(String(b.c.name || ''));
   });
@@ -5419,12 +5559,7 @@ function builtInFormulaForKey(key, rowNum) {
     return "IF(A" + r + '="","",IFERROR(VLOOKUP(J' + r + ",'_Lists'!$A$2:$B$13,2,0),0))";
   }
   if (k === 'priority_score') {
-    // NOTE: MIN(G,10) is wrapped in IF(ISNUMBER(...)) so a blank or text-typed
-    // "Total Contacted" cell contributes 0, not Excel's default of ignoring the cell
-    // and returning the bare "10" from MIN's other argument (a real Excel MIN()
-    // quirk, confirmed against a live recalculation — it silently maxed out the
-    // recency bonus for any row where Total Contacted was ever entered as text).
-    return "IF(A" + r + '="","",MIN(100,ROUND(M' + r + "*40+IFERROR(VLOOKUP(I" + r + ",'_Lists'!$E$2:$F$4,2,0),0)+IFERROR(VLOOKUP(S" + r + ",'_Lists'!$H$2:$I$4,2,0),0)+MIN(IF(ISNUMBER(G" + r + "),G" + r + ",0),10)*1+IF(L" + r + ">=1000000,10,IF(L" + r + ">0,5,0))+IF(AND(Q" + r + '<>"",Q' + r + "<TODAY()),5,IF(AND(Q" + r + '<>"",Q' + r + "-TODAY()<=7),3,0)),0)))";
+    return "IF(A" + r + '="","",MIN(100,ROUND(M' + r + "*40+IFERROR(VLOOKUP(I" + r + ",'_Lists'!$E$2:$F$4,2,0),0)+IFERROR(VLOOKUP(S" + r + ",'_Lists'!$H$2:$I$4,2,0),0)+MIN(G" + r + ",10)*1+IF(L" + r + ">=1000000,10,IF(L" + r + ">0,5,0))+IF(AND(Q" + r + '<>"",Q' + r + "<TODAY()),5,IF(AND(Q" + r + '<>"",Q' + r + "-TODAY()<=7),3,0)),0)))";
   }
   if (k === 'priority') {
     return 'IF(A' + r + '="","",IF(N' + r + '>=65,"Critical",IF(N' + r + '>=45,"High",IF(N' + r + '>=25,"Medium","Low"))))';
