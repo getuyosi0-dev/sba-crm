@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.54 (2026-09-24 live-score-parity)</title>
+<title>SBA Drive CRM v25.55 (2026-09-24 priority-pipeline-excel)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -961,7 +961,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-24-live-score-parity loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-24-priority-pipeline-excel loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2945,7 +2945,8 @@ function computeAutoSwot(companies, periodMode) {
   const industries = {};
   let goodRel = 0;
   let stale60 = 0;
-  let critical = 0, high = 0, medium = 0, low = 0;
+  var _swPc = countPipelineByPriority(list);
+  let critical = _swPc.Critical || 0, high = _swPc.High || 0, medium = _swPc.Medium || 0, low = _swPc.Low || 0;
   let proposal = 0, lateStage = 0, longDecision = 0;
   let touches = 0;
   const suppliers = {};
@@ -2956,11 +2957,6 @@ function computeAutoSwot(companies, periodMode) {
     if (rel.indexOf('good') !== -1) goodRel++;
     const days = companyDaysSince(c);
     if (days != null && days >= 60) stale60++;
-    const p = companyPriorityLabel(c);
-    if (p === 'Critical') critical++;
-    else if (p === 'High') high++;
-    else if (p === 'Medium') medium++;
-    else low++;
     const st = String(c.sales_stage || '');
     if (st === 'Proposal Sent') proposal++;
     if (/Proposal Sent|Negotiation|Waiting Customer Decision|Purchase Order/i.test(st)) lateStage++;
@@ -3269,15 +3265,13 @@ function buildPptPlaceholderMap(periodMode) {
   });
 
   const active = companies.filter(function(c) { return !isClosedStage(c.sales_stage); }).length;
-  let critical = 0, high = 0, medium = 0, low = 0, criticalHigh = 0;
-  companies.forEach(function(c) {
-    if (isClosedStage(c.sales_stage)) return;
-    const p = companyPriorityLabel(c);
-    if (p === 'Critical') { critical++; criticalHigh++; }
-    else if (p === 'High') { high++; criticalHigh++; }
-    else if (p === 'Medium') medium++;
-    else low++;
-  });
+  // Same counts as Excel Dashboard Pipeline by Priority / PPT summary
+  var _pc = countPipelineByPriority(companies);
+  var critical = _pc.Critical || 0;
+  var high = _pc.High || 0;
+  var medium = _pc.Medium || 0;
+  var low = _pc.Low || 0;
+  var criticalHigh = critical + high;
   const won = companies.filter(function(c) { return String(c.sales_stage || '') === 'Won'; }).length;
   const lost = companies.filter(function(c) { return String(c.sales_stage || '') === 'Lost'; }).length;
 
@@ -3687,7 +3681,17 @@ function excelSerialToDate(v) {
   return null;
 }
 function companyPriorityLabel(c) {
-  // Always from live score (Excel col O formula) — ignore cached Priority cell
+  // Prefer Excel Priority column (O) when it is a real label — same as Dashboard COUNTIF
+  var raw = c && (c.priority != null ? c.priority : c.priority_label);
+  if (raw != null && String(raw).trim() !== '' && String(raw).trim().charAt(0) !== '=') {
+    var s = String(raw).trim();
+    var lower = s.toLowerCase();
+    if (lower === 'critical') return 'Critical';
+    if (lower === 'high') return 'High';
+    if (lower === 'medium') return 'Medium';
+    if (lower === 'low') return 'Low';
+  }
+  // Fallback: live score thresholds (same as Excel O formula from N)
   const score = computeLivePriorityScore(c);
   if (!isNaN(score) && isFinite(score)) {
     if (score >= 65) return 'Critical';
@@ -3696,6 +3700,19 @@ function companyPriorityLabel(c) {
     return 'Low';
   }
   return '';
+}
+
+/** Count Pipeline by Priority — same rule as Excel Dashboard COUNTIF on column O. */
+function countPipelineByPriority(companies) {
+  var counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+  (companies || []).forEach(function(c) {
+    var nm = String(c.name || c.company || '').trim();
+    if (!nm || /^(legend|notes?)$/i.test(nm) || nm.indexOf('——') === 0) return;
+    // Excel COUNTIF counts every row with a Priority label (including closed)
+    var p = companyPriorityLabel(c);
+    if (counts[p] !== undefined) counts[p]++;
+  });
+  return counts;
 }
 function companyDaysSince(c) {
   // Always from Last Contact (Excel col F = TODAY()-E) — ignore cached days cell
@@ -4128,11 +4145,11 @@ function renderDashboard() {
   // Always count named rows on Sales Tracker (Dashboard sheet formulas are often stale in the file)
   const total = companies.length;
   const active = companies.filter(c => !isClosedStage(c.sales_stage)).length;
-  const criticalHigh = companies.filter(function(c) {
-    if (isClosedStage(c.sales_stage)) return false;
-    const p = companyPriorityLabel(c).toLowerCase();
-    return p === 'critical' || p === 'high';
-  }).length;
+  // Excel D7: COUNTIF(O,"Critical")+COUNTIF(O,"High") — all rows, not open-only
+  const criticalHigh = (function() {
+    var pc = countPipelineByPriority(companies);
+    return (pc.Critical || 0) + (pc.High || 0);
+  })();
 
   const today = new Date();
   const todayUTC = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
@@ -4205,12 +4222,7 @@ function renderDashboard() {
 
   // Priority
   const prioOrder = ['Critical','High','Medium','Low'];
-  const prioCounts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
-  companies.forEach(function(c) {
-    if (isClosedStage(c.sales_stage)) return;
-    const p = companyPriorityLabel(c);
-    if (prioCounts[p] !== undefined) prioCounts[p]++;
-  });
+  const prioCounts = countPipelineByPriority(companies);
   const prioColors = { Critical: 'var(--danger)', High: 'var(--warning)', Medium: 'var(--info)', Low: '#9e9e9e' };
   if (el('pipelineByPriority')) {
     el('pipelineByPriority').innerHTML = prioOrder.map(p =>
