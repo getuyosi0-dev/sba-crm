@@ -7,7 +7,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SBA Drive CRM v25.53 (2026-09-24 top10-from-dashboard)</title>
+<title>SBA Drive CRM v25.54 (2026-09-24 live-score-parity)</title>
 <!--
   FIX (prerequisite for both reported problems): the two Google script tags
   used to live here with no onload wiring, AND were duplicated again near
@@ -396,7 +396,7 @@ body { padding-bottom: 80px; }
       <span>Top 10 by Priority Score</span>
       <button type="button" class="btn btn-secondary btn-sm" onclick="refreshTop10Table()" style="width:auto;padding:6px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Top 10 is taken from the Excel <strong>Dashboard</strong> table (same list and scores you see in Excel). Opportunities / Support / By When come from Sales Tracker.</p>
+    <p style="font-size:12px;color:var(--text-light);margin:0 0 10px;">Top 10 is <strong>live-computed</strong> with the same Priority Score formula as Excel (stage×40 + potential + relationship + visits + value + urgency). Ties break by sheet row order.</p>
     <button type="button" class="btn btn-secondary btn-sm" style="width:auto;margin-bottom:10px;" onclick="fixExcelOpenDealRanking()">Fix Excel Top 10 (exclude Won)</button>
     <div id="top10List" style="overflow-x:auto;"></div>
   </div>
@@ -961,7 +961,7 @@ let gapiScriptLoaded = false;
 let gisScriptLoaded = false;
 let gapiClientReady = false;
 let tokenClient = null;
-console.log('[SBA] sba25-2026-09-24-top10-from-dashboard loaded — if you do not see this exact string, the browser is caching an old file');
+console.log('[SBA] sba25-2026-09-24-live-score-parity loaded — if you do not see this exact string, the browser is caching an old file');
 let accessToken = null;
 let currentFile = null;
 let workbook = null;               // SheetJS-parsed workbook — READ-ONLY, used only to power the UI (lists, search, dashboard). Never written back to Drive.
@@ -2078,21 +2078,7 @@ let execPeriodMode = 'month'; // month | 3m | 6m | year | all
  * Prefer Excel cached score when present so Top 10 matches Google Sheets Dashboard.
  */
 function companyPriorityScore(c) {
-  // Prefer Excel/Sheets cached Priority Score only when it is a real number.
-  // New rows from the app often have blank score or a formula string ("=IF...") until
-  // Excel/Sheets recalculates — those must use the live formula or Top 10 is wrong.
-  const raw = c && c.priority_score;
-  if (raw === undefined || raw === null || String(raw).trim() === '') {
-    return computeLivePriorityScore(c);
-  }
-  const s = String(raw).trim();
-  if (s.charAt(0) === '=') {
-    return computeLivePriorityScore(c);
-  }
-  const sheetScore = parseFloat(s);
-  if (!isNaN(sheetScore) && isFinite(sheetScore) && sheetScore > 0) {
-    return sheetScore;
-  }
+  // Always live-compute — never trust cached Priority Score cells (they go stale).
   return computeLivePriorityScore(c);
 }
 
@@ -2334,8 +2320,9 @@ function pickCompanyField(c, keys) {
 }
 
 function computeLivePriorityScore(c) {
-  // Mirror Sales Tracker Priority Score formula using _Lists maps.
-  // Hardened: fuzzy stage/relationship match; prefer sheet Probability when present.
+  // Exact mirror of Sales Tracker col N:
+  // MIN(100, ROUND(M*40 + VLOOKUP(I) + VLOOKUP(S) + MIN(G,10) + valueBonus + urgency))
+  // M = IFERROR(VLOOKUP(J, _Lists stages, 2), 0)  — always from stage, never cached M
   const lists = typeof getScoreLists === 'function' ? getScoreLists() : null;
   const stageProb = (lists && lists.stageProb) || {
     'Lead': 0.05, 'Qualified': 0.1, 'Need Identified': 0.15,
@@ -2346,36 +2333,43 @@ function computeLivePriorityScore(c) {
   const potMap = (lists && lists.potMap) || { 'High': 30, 'Medium': 10, 'Low': 3 };
   const relMap = (lists && lists.relMap) || { 'Good Relationship': 15, 'Warm': 8, 'Cold': 2 };
 
+  function toNum(v) {
+    if (v === undefined || v === null || v === '') return null;
+    if (typeof v === 'number' && isFinite(v)) return v;
+    var s = String(v).replace(/,/g, '').replace(/%/g, '').replace(/ETB/gi, '').trim();
+    if (!s || s.charAt(0) === '=') return null;
+    var n = parseFloat(s);
+    return (!isNaN(n) && isFinite(n)) ? n : null;
+  }
+
   function lookupMap(map, raw) {
     var s = String(raw || '').trim();
     if (!s) return 0;
-    if (map[s] != null) return map[s];
-    // case-insensitive exact
+    if (map[s] != null) return Number(map[s]) || 0;
     var lower = s.toLowerCase();
     for (var k in map) {
-      if (Object.prototype.hasOwnProperty.call(map, k) && k.toLowerCase() === lower) return map[k];
+      if (Object.prototype.hasOwnProperty.call(map, k) && k.toLowerCase() === lower) return Number(map[k]) || 0;
     }
-    // prefix / contains (e.g. "Good" → "Good Relationship", "Waiting Customer" → full stage)
-    var best = null, bestLen = 0;
+    var best = 0, bestLen = 0;
     for (var k in map) {
       if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
       var kl = k.toLowerCase();
-      if (kl.indexOf(lower) === 0 || lower.indexOf(kl) === 0 || kl.indexOf(lower) >= 0 || lower.indexOf(kl) >= 0) {
-        if (k.length > bestLen) { bestLen = k.length; best = map[k]; }
+      if (kl.indexOf(lower) === 0 || lower.indexOf(kl) === 0) {
+        if (k.length > bestLen) { bestLen = k.length; best = Number(map[k]) || 0; }
       }
     }
-    return best != null ? best : 0;
+    return best;
   }
 
   function lookupStageProb(stage) {
+    // Excel: IFERROR(VLOOKUP(...), 0) — default 0, not 0.05
     var s = String(stage || '').trim();
-    if (!s) return 0.05;
-    if (stageProb[s] != null) return stageProb[s];
+    if (!s) return 0;
+    if (stageProb[s] != null) return Number(stageProb[s]);
     var lower = s.toLowerCase();
     for (var k in stageProb) {
-      if (Object.prototype.hasOwnProperty.call(stageProb, k) && k.toLowerCase() === lower) return stageProb[k];
+      if (Object.prototype.hasOwnProperty.call(stageProb, k) && k.toLowerCase() === lower) return Number(stageProb[k]);
     }
-    // "Waiting Customer" → "Waiting Customer Decision"; "Decision time" → "Decision time taking long"
     var bestKey = null, bestLen = 0;
     for (var k in stageProb) {
       if (!Object.prototype.hasOwnProperty.call(stageProb, k)) continue;
@@ -2384,39 +2378,26 @@ function computeLivePriorityScore(c) {
         if (k.length > bestLen) { bestLen = k.length; bestKey = k; }
       }
     }
-    if (bestKey) return stageProb[bestKey];
-    return 0.05;
+    return bestKey ? Number(stageProb[bestKey]) : 0;
   }
 
   const stage = String(pickCompanyField(c, ['sales_stage', 'stage', 'pipeline_stage']) || '').trim();
+  // Always derive probability from stage (same as Excel col M formula) — never cached M
+  const prob = lookupStageProb(stage);
 
-  // Prefer Excel Probability (%) cell when present (col M) — matches what Excel uses in the score formula
-  let prob = null;
-  var probRaw = pickCompanyField(c, ['probability', 'probability_', 'prob']);
-  if (probRaw !== '' && probRaw != null) {
-    var p = parseFloat(String(probRaw).replace(/%/g, '').trim());
-    if (!isNaN(p)) {
-      if (p > 1) p = p / 100;
-      if (p >= 0 && p <= 1) prob = p;
-    }
-  }
-  if (prob == null) prob = lookupStageProb(stage);
-
-  let visits = parseFloat(String(pickCompanyField(c, ['total_contacted', 'total_contact', 'visit_count']) || '0').replace(/,/g, '').trim());
-  if (isNaN(visits) || visits < 0) visits = 0;
+  var visitsN = toNum(pickCompanyField(c, ['total_contacted', 'total_contact', 'visit_count']));
+  var visits = visitsN == null ? 0 : visitsN;
+  if (visits < 0) visits = 0;
   visits = Math.min(visits, 10);
 
-  let val = parseFloat(String(pickCompanyField(c, ['est_value', 'est_business_value_etb', 'est_business_value', 'business_value']) || '0').replace(/,/g, '').replace(/ETB/gi, '').trim());
-  if (isNaN(val) || val < 0) val = 0;
+  var valN = toNum(pickCompanyField(c, ['est_value', 'est_business_value_etb', 'est_business_value', 'business_value', 'est_business_value_etb_']));
+  var val = valN == null ? 0 : valN;
+  if (val < 0) val = 0;
   const valueBonus = val >= 1000000 ? 10 : (val > 0 ? 5 : 0);
 
-  const potRaw = String(pickCompanyField(c, ['sales_potential', 'potential']) || '').trim();
-  const relRaw = String(pickCompanyField(c, ['relationship_level', 'relationship']) || '').trim();
-  const pot = lookupMap(potMap, potRaw);
-  const rel = lookupMap(relMap, relRaw);
+  const pot = lookupMap(potMap, pickCompanyField(c, ['sales_potential', 'potential']));
+  const rel = lookupMap(relMap, pickCompanyField(c, ['relationship_level', 'relationship']));
 
-  // Urgency: compare pure calendar days (no timezone shift)
-  // Same as Excel: Q < TODAY() → +5; Q - TODAY() <= 7 → +3
   let urgency = 0;
   let urgencyNote = '';
   try {
@@ -2428,28 +2409,21 @@ function computeLivePriorityScore(c) {
       const fuDay = Date.UTC(fuParts.y, fuParts.mo - 1, fuParts.d);
       const todayDay = Date.UTC(todayParts.y, todayParts.mo - 1, todayParts.d);
       const diffDays = Math.round((fuDay - todayDay) / 86400000);
-      if (diffDays < 0) {
-        urgency = 5;
-        urgencyNote = 'overdue(' + diffDays + 'd)';
-      } else if (diffDays <= 7) {
-        urgency = 3;
-        urgencyNote = 'within7(' + diffDays + 'd)';
-      } else {
-        urgencyNote = 'later(' + diffDays + 'd)';
-      }
+      if (diffDays < 0) { urgency = 5; urgencyNote = 'overdue'; }
+      else if (diffDays <= 7) { urgency = 3; urgencyNote = 'within7'; }
     }
   } catch (e) {}
 
   const total = Math.min(100, Math.round(prob * 40 + pot + rel + visits + valueBonus + urgency));
   if (typeof window !== 'undefined' && window.__SBA_DEBUG_SCORE) {
     console.log('[SBA score]', (c && (c.name || c.company)) || '', {
-      prob: prob, pot: pot, rel: rel, visits: visits, valueBonus: valueBonus,
-      urgency: urgency, urgencyNote: urgencyNote, total: total,
-      sheetScore: c && c.priority_score
+      stage: stage, prob: prob, pot: pot, rel: rel, visits: visits,
+      valueBonus: valueBonus, urgency: urgency, urgencyNote: urgencyNote, total: total
     });
   }
   return total;
 }
+
 
 /** Plan By When first; if empty use Next Follow-up Date (next visit plan). */
 function resolveTop10ByWhen(c) {
@@ -2588,107 +2562,42 @@ function findCompanyByName(companies, name) {
  * Fallback: Sales Tracker Priority Score / Rank only if Dashboard table is missing.
  */
 function computeTop10ByPriority(companies) {
+  // Always live Priority Score; tie-break by original sheet row (Excel Rank helper rule)
   const listAll = companies || getCompaniesFromWorkbook();
-  const dashRows = readTop10FromDashboard();
-
-  if (dashRows.length >= 5) {
-    var ranked = dashRows.slice(0, 10).map(function(d) {
-      var c = findCompanyByName(listAll, d.company);
-      if (!c) {
-        // Synthetic company so table still shows Dashboard values
-        c = {
-          name: d.company,
-          company: d.company,
-          sales_stage: d.stage,
-          stage: d.stage,
-          priority: d.priority,
-          priority_score: d.score,
-          sales_owner: '',
-          opportunities: '',
-          support_needed: '',
-          plan_by_when: '',
-          next_follow_up_date: ''
-        };
-      } else {
-        // Overlay Dashboard stage/score/priority so UI matches Excel exactly
-        if (d.stage) { c.sales_stage = d.stage; c.stage = d.stage; }
-        if (d.priority) c.priority = d.priority;
-        if (d.score != null) c.priority_score = d.score;
-      }
-      return {
-        c: c,
-        score: d.score != null ? d.score : (parseFloat(c.priority_score) || 0),
-        rank: d.rank,
-        live: d.score,
-        fromSheet: true,
-        fromDashboard: true
-      };
-    });
-    console.log('[SBA] Top10 from Dashboard sheet (Excel view)', ranked.map(function(t) {
-      return t.rank + '. ' + (t.c.name || '') + ' score=' + t.score;
-    }));
-    return ranked;
-  }
-
-  // Fallback: Sales Tracker scores
   const open = listAll.filter(function(c) {
-    const nm = companyDisplayName(c);
+    const nm = typeof companyDisplayName === 'function' ? companyDisplayName(c) : (c.name || '');
     if (!nm) return false;
     if (/^(legend|notes?)$/i.test(nm)) return false;
     if (isClosedStage(c.sales_stage || c.stage)) return false;
     return true;
   });
 
-  function sheetScore(c) {
-    var candidates = [c.priority_score, c.score];
-    for (var i = 0; i < candidates.length; i++) {
-      var raw = candidates[i];
-      if (raw === undefined || raw === null || String(raw).trim() === '') continue;
-      var s = String(raw).trim();
-      if (s.charAt(0) === '=') continue;
-      var n = parseFloat(s.replace(/,/g, ''));
-      if (!isNaN(n) && isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
-    }
-    return null;
-  }
-  function sheetRank(c) {
-    var raw = c.rank_helper != null ? c.rank_helper : c.rank;
-    if (raw === undefined || raw === null || String(raw).trim() === '') return null;
-    var s = String(raw).trim();
-    if (s.charAt(0) === '=') return null;
-    var n = parseFloat(s);
-    if (!isNaN(n) && isFinite(n) && n > 0) return n;
-    return null;
-  }
-
   var withMeta = open.map(function(c) {
-    var live = computeLivePriorityScore(c);
-    var sc = sheetScore(c);
-    var rk = sheetRank(c);
-    var score = (sc != null) ? sc : live;
-    return { c: c, score: score, live: live, rank: rk, fromSheet: sc != null };
+    var score = computeLivePriorityScore(c);
+    var row = (c._rowIndex != null) ? c._rowIndex : 9999;
+    return { c: c, score: score, row: row };
   });
 
-  var hasRanks = withMeta.filter(function(x) { return x.rank != null; }).length >= 5;
-  if (hasRanks) {
-    withMeta = withMeta.filter(function(x) { return x.rank != null; })
-      .sort(function(a, b) {
-        if (a.rank !== b.rank) return a.rank - b.rank;
-        return String(a.c.name || '').localeCompare(String(b.c.name || ''));
-      });
-  } else {
-    withMeta.sort(function(a, b) {
-      if (b.score !== a.score) return b.score - a.score;
-      return String(a.c.name || '').localeCompare(String(b.c.name || ''));
-    });
-  }
-
-  var ranked = withMeta.slice(0, 10).map(function(x) {
-    return { c: x.c, score: x.score, rank: x.rank, live: x.live, fromSheet: x.fromSheet };
+  withMeta.sort(function(a, b) {
+    if (b.score !== a.score) return b.score - a.score;
+    // Excel: same score → lower row number ranks higher
+    if (a.row !== b.row) return a.row - b.row;
+    return String(a.c.name || '').localeCompare(String(b.c.name || ''));
   });
-  console.log('[SBA] Top10 fallback (no Dashboard table)', ranked.map(function(t) {
-    return (t.c.name || '') + ' score=' + t.score;
+
+  var ranked = withMeta.slice(0, 10).map(function(x, i) {
+    return { c: x.c, score: x.score, rank: i + 1, live: x.score, fromSheet: false };
+  });
+  console.log('[SBA] Top10 live scores', ranked.map(function(t) {
+    return t.rank + '. ' + (t.c.name || '') + ' score=' + t.score + ' row=' + t.c._rowIndex;
   }));
+  if (ranked.length && ranked[0].c) {
+    try {
+      window.__SBA_DEBUG_SCORE = true;
+      computeLivePriorityScore(ranked[0].c);
+      window.__SBA_DEBUG_SCORE = false;
+    } catch (e) {}
+  }
   return ranked;
 }
 
@@ -3778,12 +3687,8 @@ function excelSerialToDate(v) {
   return null;
 }
 function companyPriorityLabel(c) {
-  const p = String(c.priority || '').trim();
-  // Ignore formula strings in Priority column
-  if (p && p.charAt(0) !== '=') return p;
-  const score = typeof computeLivePriorityScore === 'function'
-    ? computeLivePriorityScore(c)
-    : parseFloat(c.priority_score);
+  // Always from live score (Excel col O formula) — ignore cached Priority cell
+  const score = computeLivePriorityScore(c);
   if (!isNaN(score) && isFinite(score)) {
     if (score >= 65) return 'Critical';
     if (score >= 45) return 'High';
@@ -3793,13 +3698,35 @@ function companyPriorityLabel(c) {
   return '';
 }
 function companyDaysSince(c) {
-  const d = parseFloat(c.days_since_last_visit);
-  if (!isNaN(d) && d >= 0) return d;
-  const last = excelSerialToDate(c.last_contact_date);
-  if (!last) return null;
+  // Always from Last Contact (Excel col F = TODAY()-E) — ignore cached days cell
+  const lastRaw = c && (c.last_contact_date || c.last_visit);
+  if (lastRaw === undefined || lastRaw === null || String(lastRaw).trim() === '') return null;
+  const parts = typeof calendarPartsFromAny === 'function' ? calendarPartsFromAny(lastRaw) : null;
+  if (!parts || !parts.y) return null;
   const today = new Date();
   const t0 = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
-  return Math.round((t0 - Date.UTC(last.getUTCFullYear(), last.getUTCMonth(), last.getUTCDate())) / 86400000);
+  const lastDay = Date.UTC(parts.y, parts.mo - 1, parts.d);
+  return Math.round((t0 - lastDay) / 86400000);
+}
+function computeFollowUpStatus(c) {
+  // Excel col R
+  const stage = String(c.sales_stage || c.stage || '').trim();
+  if (stage === 'Won') return 'Closed - Won';
+  if (stage === 'Lost') return 'Closed - Lost';
+  if (stage === 'No Opportunity') return 'Closed - No Opportunity';
+  const fuRaw = c.next_follow_up_date;
+  const fuParts = fuRaw != null && String(fuRaw).trim() !== '' && typeof calendarPartsFromAny === 'function'
+    ? calendarPartsFromAny(fuRaw) : null;
+  if (fuParts && fuParts.y) {
+    const today = new Date();
+    const todayDay = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+    const fuDay = Date.UTC(fuParts.y, fuParts.mo - 1, fuParts.d);
+    if (fuDay < todayDay) return 'Overdue';
+  }
+  if (stage === 'Proposal Sent') return 'Proposal Outstanding';
+  if (stage === 'Technical Discussion' || stage === 'Demo / Sample') return 'Technical Discussion';
+  if (stage === 'Waiting Customer Decision' || stage === 'Negotiation') return 'Waiting Customer';
+  return 'Needs Follow-up';
 }
 function isClosedStage(stage) {
   const s = String(stage || '').toLowerCase().trim();
@@ -4201,7 +4128,8 @@ function renderDashboard() {
   // Always count named rows on Sales Tracker (Dashboard sheet formulas are often stale in the file)
   const total = companies.length;
   const active = companies.filter(c => !isClosedStage(c.sales_stage)).length;
-  const criticalHigh = companies.filter(c => {
+  const criticalHigh = companies.filter(function(c) {
+    if (isClosedStage(c.sales_stage)) return false;
     const p = companyPriorityLabel(c).toLowerCase();
     return p === 'critical' || p === 'high';
   }).length;
@@ -4278,7 +4206,8 @@ function renderDashboard() {
   // Priority
   const prioOrder = ['Critical','High','Medium','Low'];
   const prioCounts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
-  companies.forEach(c => {
+  companies.forEach(function(c) {
+    if (isClosedStage(c.sales_stage)) return;
     const p = companyPriorityLabel(c);
     if (prioCounts[p] !== undefined) prioCounts[p]++;
   });
@@ -4322,30 +4251,38 @@ function renderDashboard() {
   }
   applyModeUI();
 
-  // Other metrics
-  const proposals = companies.filter(c => String(c.sales_stage || '') === 'Proposal Sent').length;
+  // Other metrics — match Excel Dashboard formulas
+  // Proposals Outstanding: Proposal Sent AND not overdue (overdue Proposal Sent counts under Overdue)
+  const proposals = companies.filter(function(c) {
+    if (String(c.sales_stage || '') !== 'Proposal Sent') return false;
+    const fu = excelSerialToDate(c.next_follow_up_date);
+    if (!fu) return true;
+    const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
+    return fuUTC >= todayUTC;
+  }).length;
   const weekEnd = todayUTC + 7 * 86400000;
-  const followThisWeek = companies.filter(c => {
-    if (isClosedStage(c.sales_stage)) return false;
+  // Follow-up This Week: Excel does NOT exclude closed deals
+  const followThisWeek = companies.filter(function(c) {
     const fu = excelSerialToDate(c.next_follow_up_date);
     if (!fu) return false;
     const fuUTC = Date.UTC(fu.getUTCFullYear(), fu.getUTCMonth(), fu.getUTCDate());
     return fuUTC >= todayUTC && fuUTC <= weekEnd;
   }).length;
-  const notVisited60 = companies.filter(c => {
+  const notVisited60 = companies.filter(function(c) {
     const d = companyDaysSince(c);
     return d != null && d >= 60;
   }).length;
-  const won = companies.filter(c => String(c.sales_stage || '') === 'Won').length;
-  const lost = companies.filter(c => String(c.sales_stage || '') === 'Lost').length;
+  const won = companies.filter(function(c) { return String(c.sales_stage || '') === 'Won'; }).length;
+  const lost = companies.filter(function(c) { return String(c.sales_stage || '') === 'Lost'; }).length;
   const winRate = (won + lost) > 0 ? Math.round(won / (won + lost) * 100) : 0;
-  const daysVals = companies.map(c => companyDaysSince(c)).filter(d => d != null && !isNaN(d));
+  const daysVals = companies.map(function(c) { return companyDaysSince(c); }).filter(function(d) { return d != null && !isNaN(d); });
   const avgDays = daysVals.length ? (daysVals.reduce(function(a, b) { return a + b; }, 0) / daysVals.length).toFixed(1) : '—';
-  const ages = companies.map(c => {
+  // Avg Opportunity Age: Excel SUMPRODUCT includes negative day counts
+  const ages = companies.map(function(c) {
     const first = excelSerialToDate(c.first_contact_date);
     if (!first) return null;
     return Math.round((todayUTC - Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), first.getUTCDate())) / 86400000);
-  }).filter(d => d != null && d >= 0);
+  }).filter(function(d) { return d != null && !isNaN(d); });
   const avgAge = ages.length ? (ages.reduce(function(a, b) { return a + b; }, 0) / ages.length).toFixed(1) : '—';
 
   const otherRows = [
@@ -4631,32 +4568,26 @@ function renderCompanies() {
       return companyTempBucket(c) === companyFilter.toLowerCase();
     });
   }
-  // Sort by Excel Rank (helper) when present; else Priority Score; closed at bottom
+  // Sort by live Priority Score (same as Excel); ties by sheet row; closed at bottom
   list = list.map(function(c) {
     var closed = isClosedStage(c.sales_stage || c.stage);
-    var rk = parseFloat(c.rank_helper != null ? c.rank_helper : c.rank);
-    if (isNaN(rk) || rk <= 0) rk = null;
-    var sc = parseFloat(c.priority_score);
-    if (isNaN(sc) || sc <= 0) {
-      sc = typeof computeLivePriorityScore === 'function' ? computeLivePriorityScore(c) : 0;
-    }
-    return { c: c, score: sc, rank: rk, closed: closed };
+    var sc = computeLivePriorityScore(c);
+    var row = (c._rowIndex != null) ? c._rowIndex : 9999;
+    return { c: c, score: sc, row: row, closed: closed };
   }).sort(function(a, b) {
     if (a.closed !== b.closed) return a.closed ? 1 : -1;
-    if (a.rank != null && b.rank != null && a.rank !== b.rank) return a.rank - b.rank;
-    if (a.rank != null && b.rank == null) return -1;
-    if (a.rank == null && b.rank != null) return 1;
     if (b.score !== a.score) return b.score - a.score;
+    if (a.row !== b.row) return a.row - b.row;
     return String(a.c.name || '').localeCompare(String(b.c.name || ''));
   });
 
-  var fallbackRank = 0;
+  var openRank = 0;
   document.getElementById('companyList').innerHTML = list.map(function(item) {
     var c = item.c;
     var score = item.score;
     var closed = item.closed;
-    var rank = item.rank;
-    if (!closed && rank == null) { fallbackRank += 1; rank = fallbackRank; }
+    var rank = null;
+    if (!closed) { openRank += 1; rank = openRank; }
     var topBadge = closed
       ? '<span class="badge" style="background:#eceff1;color:#546e7a;">Closed</span>'
       : (rank <= 10
